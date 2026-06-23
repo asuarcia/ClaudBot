@@ -1,0 +1,11 @@
+{
+  "name": "claudbot-exec",
+  "version": "0.1.0",
+  "description": "MCP server: routes Claude Code to dynamic sub-agents via OpenAI-compatible endpoints",
+  "type": "module",
+  "main": "index.mjs",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "yaml": "^2.8.3"
+  }
+}

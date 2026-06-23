@@ -1,0 +1,31 @@
+# Claudbot Agent Registry
+# ------------------------------------------------------------------
+# Define sub-agents here. Claude will read this to decide who to
+# delegate to. Add an agent by filling in the four fields below.
+#
+# Fields:
+#   name        - short identifier, used when calling run_agent()
+#   model       - model ID as the endpoint expects it
+#   endpoint    - base URL of any OpenAI-compatible API
+#   apiKeyEnv   - env var holding the API key (null for local endpoints)
+#   jobDescription - what this agent is good at (guides Claude's routing)
+# ------------------------------------------------------------------
+
+agents:
+  - name: researcher
+    model: qwen3:14b
+    endpoint: http://localhost:11434/v1
+    apiKeyEnv: null
+    jobDescription: >
+      Research topics, summarize documents, and answer factual questions.
+      Best for: web research, summarization, literature review, factual lookups.
+      Returns well-structured markdown.
+
+  - name: nemotron
+    model: nvidia/llama-3.3-nemotron-super-49b-v1
+    endpoint: https://integrate.api.nvidia.com/v1
+    apiKeyEnv: NVIDIA_API_KEY
+    jobDescription: >
+      Deep reasoning and complex multi-step problem solving.
+      Best for: hard analytical tasks, long-context reasoning, evaluation,
+      comparing options, or any task that benefits from an extended thinking budget.

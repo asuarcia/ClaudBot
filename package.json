@@ -1,0 +1,16 @@
+{
+  "name": "claudbot",
+  "version": "0.1.0",
+  "description": "Autonomous agent orchestrated by Claude Code, with dynamic sub-agents and Obsidian memory",
+  "type": "module",
+  "bin": {
+    "claudbot": "./claudbot.mjs"
+  },
+  "scripts": {
+    "setup": "npm install && cd mcp-servers/claudbot-exec && npm install",
+    "start": "node claudbot.mjs"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

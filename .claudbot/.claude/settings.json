@@ -1,0 +1,25 @@
+{
+  "mcpServers": {
+    "claudbot-exec": {
+      "command": "node",
+      "args": ["../../mcp-servers/claudbot-exec/index.mjs"],
+      "env": {}
+    },
+    "obsidian-brain": {
+      "command": "npx",
+      "args": ["-y", "mcp-obsidian", "C:\\Repo\\MyBrain"]
+    }
+  },
+  "permissions": {
+    "allow": [
+      "Bash(*)",
+      "Read(*)",
+      "Write(*)",
+      "Edit(*)",
+      "Glob(*)",
+      "Grep(*)",
+      "WebSearch(*)",
+      "WebFetch(*)"
+    ]
+  }
+}

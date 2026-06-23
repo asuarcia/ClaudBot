@@ -1,0 +1,5 @@
+node_modules/
+openclaw-main/
+NemoClaw-main/
+*.log
+.env
