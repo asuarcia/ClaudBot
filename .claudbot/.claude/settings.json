@@ -2,12 +2,18 @@
   "mcpServers": {
     "claudbot-exec": {
       "command": "node",
-      "args": ["../../mcp-servers/claudbot-exec/index.mjs"],
+      "args": [
+        "C:\\Repo\\ClaudBot\\mcp-servers\\claudbot-exec\\index.mjs"
+      ],
       "env": {}
     },
     "obsidian-brain": {
       "command": "npx",
-      "args": ["-y", "mcp-obsidian", "C:\\Repo\\MyBrain"]
+      "args": [
+        "-y",
+        "mcp-obsidian",
+        "C:\\Repo\\MyBrain"
+      ]
     }
   },
   "permissions": {
