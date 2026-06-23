@@ -69,10 +69,17 @@ export class ClaudeProvider extends BaseProvider {
       args.push("--resume", sessionId);
     }
 
+    // Strip env vars injected by a parent Claude Code session so the child
+    // uses subscription auth instead of accidentally picking up an API key.
+    const childEnv = Object.fromEntries(
+      Object.entries(process.env).filter(([k]) =>
+        !k.startsWith("ANTHROPIC_") && !k.startsWith("CLAUDE_CODE_")
+      )
+    );
+
     const child = spawn("claude", args, {
       cwd: cwd ?? CLAUDBOT_ROOT,
-      env: process.env,
-      // stdout/stderr piped; stdin closed
+      env: childEnv,
       stdio: ["ignore", "pipe", "pipe"],
     });
 
