@@ -39,22 +39,40 @@ const MODE_LABELS = {
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 /**
- * Patch settings.json with the absolute path to claudbot-exec so MCP
- * connects regardless of where the repo is cloned.
+ * Wire up the claudbot-exec MCP server so Claude Code always loads it.
+ *
+ * Claude Code's settings.json has NO `mcpServers` field — that config is
+ * silently ignored. Project-scoped MCP servers must live in a `.mcp.json`
+ * at the working directory, and must be pre-approved (trusted) or Claude
+ * prompts before loading them. We do both here, using an absolute path so
+ * it works no matter where the repo is cloned.
  */
 function patchSettings() {
-  const settingsPath = path.join(CLAUDBOT_ROOT, ".claude", "settings.json");
   const execPath = path.join(ROOT, "mcp-servers", "claudbot-exec", "index.mjs");
 
-  let settings = {};
-  try { settings = JSON.parse(readFileSync(settingsPath, "utf8")); } catch { /* first run */ }
-
-  settings.mcpServers = settings.mcpServers ?? {};
-  settings.mcpServers["claudbot-exec"] = {
+  // 1. Declare the server in .mcp.json at the cwd Claude runs in.
+  const mcpJsonPath = path.join(CLAUDBOT_ROOT, ".mcp.json");
+  let mcpJson = {};
+  try { mcpJson = JSON.parse(readFileSync(mcpJsonPath, "utf8")); } catch { /* first run */ }
+  mcpJson.mcpServers = mcpJson.mcpServers ?? {};
+  mcpJson.mcpServers["claudbot-exec"] = {
     command: "node",
     args: [execPath],
     env: {},
   };
+  writeFileSync(mcpJsonPath, JSON.stringify(mcpJson, null, 2));
+
+  // 2. Pre-approve it in settings.json so it loads with no trust prompt.
+  const settingsPath = path.join(CLAUDBOT_ROOT, ".claude", "settings.json");
+  let settings = {};
+  try { settings = JSON.parse(readFileSync(settingsPath, "utf8")); } catch { /* first run */ }
+
+  // Drop the old (ignored) mcpServers block if a previous build wrote one.
+  delete settings.mcpServers;
+
+  const enabled = new Set(settings.enabledMcpjsonServers ?? []);
+  enabled.add("claudbot-exec");
+  settings.enabledMcpjsonServers = [...enabled];
 
   mkdirSync(path.dirname(settingsPath), { recursive: true });
   writeFileSync(settingsPath, JSON.stringify(settings, null, 2));

@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "claudbot-exec": {
+      "command": "node",
+      "args": [
+        "C:\\Repo\\ClaudBot\\mcp-servers\\claudbot-exec\\index.mjs"
+      ],
+      "env": {}
+    }
+  }
+}
