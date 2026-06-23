@@ -1,0 +1,40 @@
+services:
+  claudbot:
+    build: .
+    image: claudbot:latest
+    container_name: claudbot
+
+    # Interactive terminal — required for the REPL
+    stdin_open: true
+    tty: true
+
+    volumes:
+      # Auth persistence: Claude Code login survives container restarts.
+      # First time: run  docker compose run claudbot claude auth login
+      - claudbot-auth:/root/.claude
+
+      # Workspace: files Claude can read/edit are isolated here.
+      # On the host these appear at ./workspace/
+      - ./workspace:/workspace
+
+    environment:
+      # ── NIM fallback (optional) ──────────────────────────────────────────
+      # Set these to enable the NVIDIA NIM provider as the third-tier fallback.
+      - NIM_API_KEY=${NIM_API_KEY:-}
+      - NIM_BASE_URL=${NIM_BASE_URL:-https://integrate.api.nvidia.com/v1}
+      - NIM_MODEL=${NIM_MODEL:-meta/llama-3.1-70b-instruct}
+
+      # ── Codex fallback (optional) ─────────────────────────────────────────
+      # If codex CLI is installed and authenticated, it auto-activates as fallback.
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+
+    # Limits: keep Claude from running wild on your machine
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
+
+volumes:
+  # Named volume keeps Claude Code auth between container restarts
+  claudbot-auth:

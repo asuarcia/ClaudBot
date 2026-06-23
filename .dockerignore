@@ -1,7 +1,7 @@
 node_modules/
 openclaw-main/
 NemoClaw-main/
-workspace/*
-!workspace/.gitkeep
+workspace/
+.git/
 *.log
 .env
