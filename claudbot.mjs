@@ -8,7 +8,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { parse as yamlParse } from "yaml";
 import readline from "node:readline";
 import path from "node:path";
@@ -37,6 +37,28 @@ const MODE_LABELS = {
 };
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
+
+/**
+ * Patch settings.json with the absolute path to claudbot-exec so MCP
+ * connects regardless of where the repo is cloned.
+ */
+function patchSettings() {
+  const settingsPath = path.join(CLAUDBOT_ROOT, ".claude", "settings.json");
+  const execPath = path.join(ROOT, "mcp-servers", "claudbot-exec", "index.mjs");
+
+  let settings = {};
+  try { settings = JSON.parse(readFileSync(settingsPath, "utf8")); } catch { /* first run */ }
+
+  settings.mcpServers = settings.mcpServers ?? {};
+  settings.mcpServers["claudbot-exec"] = {
+    command: "node",
+    args: [execPath],
+    env: {},
+  };
+
+  mkdirSync(path.dirname(settingsPath), { recursive: true });
+  writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+}
 
 function parseArgs() {
   const argv = process.argv.slice(2);
@@ -128,6 +150,7 @@ async function main() {
   }
 
   const mode = parseArgs();
+  patchSettings();
   printBanner(mode);
 
   const args = [
