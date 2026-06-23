@@ -3,9 +3,8 @@
  * Claudbot — autonomous agent program
  *
  * Architecture:
- *   Primary:   Claude Code (claude -p, subscription-based, no per-token cost)
- *   Fallback 1: OpenAI Codex CLI (subscription-based)
- *   Fallback 2: NVIDIA NIM endpoint (OpenAI-compatible HTTP)
+ *   Primary:  Claude Code (claude -p, subscription-based, no per-token cost)
+ *   Fallback: NVIDIA NIM endpoint (OpenAI-compatible HTTP, NIM_API_KEY)
  *
  * Provider switching is automatic on rate limit / quota errors.
  * Session continuity is maintained via Claude Code's --resume flag.
@@ -21,7 +20,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { ClaudeProvider } from "./providers/claude.mjs";
-import { CodexProvider } from "./providers/codex.mjs";
 import { NimProvider } from "./providers/nim.mjs";
 import { RateLimitError } from "./providers/base.mjs";
 
@@ -66,7 +64,6 @@ if (!existsSync(path.join(CLAUDBOT_ROOT, "CLAUDE.md"))) {
 
 const providers = [
   new ClaudeProvider({ mode }),
-  new CodexProvider(),
   new NimProvider(),
 ];
 

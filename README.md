@@ -1,8 +1,8 @@
 # Claudbot
 
-An autonomous agent program built on top of Claude Code. You launch it like any app, talk to it in a terminal, and it works autonomously — reading files, running commands, browsing the web, writing code, and delegating specialized tasks to sub-agents.
+An autonomous agent program built on top of Claude Code. Launch it like any app, talk to it in a terminal, and it works autonomously — reading files, running commands, browsing the web, writing code, and delegating specialized tasks to sub-agents.
 
-**Cost philosophy**: no per-token API billing. The primary engine runs on a Claude subscription. Codex CLI (OpenAI subscription) and NVIDIA NIM endpoints serve as automatic fallbacks if a rate limit is hit.
+**Cost philosophy**: no per-token API billing on the main agent. The primary engine runs on a Claude subscription. A NIM endpoint serves as automatic fallback if a rate limit is hit. Sub-agents also run on NIM (or any OpenAI-compatible endpoint you choose).
 
 ---
 
@@ -12,53 +12,30 @@ An autonomous agent program built on top of Claude Code. You launch it like any 
 You (terminal)
      │
      ▼
- Claudbot REPL          ← Node.js program (this repo)
+ Claudbot REPL              ← Node.js program (this repo)
      │
-     ├─ Provider 1: Claude Code CLI     (claude -p, subscription-based)
-     ├─ Provider 2: OpenAI Codex CLI    (subscription-based fallback)
-     └─ Provider 3: NVIDIA NIM          (HTTP fallback, NIM_API_KEY)
+     ├─ Primary:   Claude Code CLI    (subscription-based, no per-token cost)
+     └─ Fallback:  NVIDIA NIM         (HTTP, kicks in on rate limit)
               │
-              ├─ MCP: claudbot-exec     ← sub-agent dispatcher
+              ├─ MCP: claudbot-exec   ← sub-agent dispatcher
               │        reads agents.yaml, calls any OpenAI-compatible endpoint
-              └─ MCP: obsidian-brain    ← long-term memory (Obsidian vault)
+              └─ MCP: obsidian-brain  ← long-term memory (Obsidian vault)
 ```
 
-Claudbot automatically switches to the next provider when a rate limit is detected — no manual intervention needed.
+Claudbot automatically switches to NIM when Claude Code hits a rate limit — no manual intervention needed.
 
 ---
 
 ## Prerequisites
 
 - [Claude Code](https://claude.ai/code) installed and authenticated (`claude auth login`)
-- Node.js 22 or later
+- Node.js 22+
 - Git
+- An [NVIDIA NIM](https://www.nvidia.com/en-us/ai/) API key (for fallback + sub-agents)
 
 Optional:
-- [OpenAI Codex CLI](https://github.com/openai/codex) — for the second fallback tier
 - Docker + Docker Compose — for the sandboxed mode
-- [Ollama](https://ollama.com) — to run local sub-agents (e.g. `qwen3:14b`)
-- An [NVIDIA NIM](https://www.nvidia.com/en-us/ai/) API key — for the NIM fallback and NIM-powered sub-agents
-
----
-
-## Permission modes
-
-Control what Claude is allowed to do without needing Docker:
-
-| Mode | Flag | What Claude can do |
-|------|------|--------------------|
-| `full` | *(default)* | Everything — no prompts, no restrictions |
-| `auto` | `--mode auto` | Runs safe ops automatically, asks before risky ones |
-| `safe` | `--mode safe` | Edits files freely, asks before every bash command |
-| `readonly` | `--mode readonly` | Read and plan only — no file edits, no bash |
-
-```bash
-claudbot --mode safe      # asks before any shell command
-claudbot --mode readonly  # pure read-only analysis
-claudbot                  # full autonomous (default)
-```
-
-The mode is shown in the startup banner so you always know what's active.
+- [Ollama](https://ollama.com) — to run local sub-agents
 
 ---
 
@@ -81,10 +58,32 @@ claudbot
 You'll see the REPL prompt:
 
 ```
- claudbot (claude-code)> 
+ claudbot (claude-code)>
 ```
 
-Type any prompt and press Enter. Claude Code handles it autonomously.
+Type any prompt and press Enter. Claude Code handles it autonomously. If it hits a rate limit, Claudbot switches to NIM automatically.
+
+---
+
+## Permission modes
+
+Control what Claude is allowed to do without needing Docker:
+
+| Mode | Flag | What Claude can do |
+|------|------|--------------------|
+| `full` | *(default)* | Everything — no prompts, no restrictions |
+| `auto` | `--mode auto` | Runs safe ops automatically, asks before risky ones |
+| `safe` | `--mode safe` | Edits files freely, asks before every bash command |
+| `readonly` | `--mode readonly` | Read and plan only — no file edits, no bash |
+
+```bash
+claudbot                  # full autonomous (default)
+claudbot --mode auto      # asks before risky shell ops
+claudbot --mode safe      # asks before any bash command
+claudbot --mode readonly  # pure read-only analysis
+```
+
+The active mode is shown in the startup banner.
 
 ---
 
@@ -100,13 +99,11 @@ docker compose build
 
 ### 2. Authenticate (first time only)
 
-Log in to your Claude subscription inside the container. The credentials are stored in a named Docker volume so you only need to do this once:
-
 ```bash
 docker compose run claudbot claude auth login
 ```
 
-Follow the browser prompt to complete sign-in.
+Follow the browser prompt. Credentials persist in a named Docker volume.
 
 ### 3. Run
 
@@ -116,11 +113,11 @@ docker compose up
 
 ### Working with files
 
-Drop any files you want Claude to access into the `workspace/` folder in this repo. That folder is mounted into the container at `/workspace`. Claude can read, edit, and create files there, and you'll see the results on your host.
+Drop files into `workspace/` on your host — that folder is mounted into the container at `/workspace`. Claude can read, edit, and create files there.
 
 ### Resource limits
 
-The container is capped at **2 CPU cores** and **2 GB RAM** by default. Edit `docker-compose.yml` to adjust:
+Defaults: **2 CPU cores / 2 GB RAM**. Edit `docker-compose.yml` to change:
 
 ```yaml
 deploy:
@@ -132,34 +129,34 @@ deploy:
 
 ---
 
-## Configuration
+## Sub-agents — `.claudbot/agents.yaml`
 
-### Sub-agents — `.claudbot/agents.yaml`
-
-Add any OpenAI-compatible model as a sub-agent without touching code. Claude discovers and routes to them automatically.
+Add any model at any OpenAI-compatible endpoint as a sub-agent. Claude reads this file and routes tasks to sub-agents automatically — no code changes needed.
 
 ```yaml
 agents:
   - name: researcher
-    model: qwen3:14b
-    endpoint: http://localhost:11434/v1   # Ollama (local, no key needed)
-    apiKeyEnv: null
+    model: meta/llama-3.1-70b-instruct
+    endpoint: https://integrate.api.nvidia.com/v1
+    apiKeyEnv: NIM_API_KEY
     jobDescription: >
       Research topics, summarize documents, answer factual questions.
+      Best for: web research, summarization, literature review.
 
   - name: nemotron
     model: nvidia/llama-3.3-nemotron-super-49b-v1
     endpoint: https://integrate.api.nvidia.com/v1
-    apiKeyEnv: NVIDIA_API_KEY
+    apiKeyEnv: NIM_API_KEY
     jobDescription: >
-      Deep reasoning and complex multi-step analytical tasks.
+      Deep reasoning and complex multi-step problem solving.
+      Best for: hard analytical tasks, evaluation, long-context reasoning.
 
-  - name: my-custom-agent
-    model: meta/llama-3.1-70b-instruct
-    endpoint: https://integrate.api.nvidia.com/v1
-    apiKeyEnv: NVIDIA_API_KEY
+  - name: my-agent
+    model: any-model-id
+    endpoint: https://any-openai-compatible-endpoint/v1
+    apiKeyEnv: MY_API_KEY_ENV_VAR
     jobDescription: >
-      Describe what this agent is good at so Claude knows when to use it.
+      Describe what this agent does so Claude knows when to delegate to it.
 ```
 
 **Fields:**
@@ -169,32 +166,29 @@ agents:
 | `name` | Short identifier. Claude calls agents by this name. |
 | `model` | Model ID as the endpoint expects it. |
 | `endpoint` | Base URL of any OpenAI-compatible API (`/chat/completions` is appended automatically). |
-| `apiKeyEnv` | Name of the environment variable holding the API key. Use `null` for local endpoints (Ollama, LM Studio, etc.). |
-| `jobDescription` | Plain English description of what this agent does well. Claude reads this to decide when to delegate. |
+| `apiKeyEnv` | Name of the env var holding the API key. Use `null` for local endpoints (Ollama, LM Studio). |
+| `jobDescription` | Plain English description. Claude reads this to decide when to delegate. |
 
-### NIM fallback — environment variables
+---
 
-Set these before running (or add to a `.env` file):
+## NIM configuration
+
+Set these before running (or add to a `.env` file you source):
 
 ```bash
+# Required for fallback + NIM-based sub-agents
 export NIM_API_KEY=nvapi-xxxxxxxxxxxx
-export NIM_BASE_URL=https://integrate.api.nvidia.com/v1   # default
-export NIM_MODEL=meta/llama-3.1-70b-instruct              # default
+
+# Optional — these are the defaults
+export NIM_BASE_URL=https://integrate.api.nvidia.com/v1
+export NIM_MODEL=meta/llama-3.1-70b-instruct
 ```
-
-### Claude Code behavior — `.claudbot/CLAUDE.md`
-
-This file is the system prompt Claudbot runs with. Edit it to change Claude's persona, priorities, or default behavior. It survives updates — it's your config, not part of the program.
-
-### MCP servers — `.claudbot/.claude/settings.json`
-
-MCP servers are declared here. `claudbot-exec` (sub-agent dispatcher) and `obsidian-brain` (Obsidian memory) are pre-configured. Add any MCP server the same way Claude Code supports them.
 
 ---
 
 ## Memory (Obsidian)
 
-Claudbot writes to an Obsidian vault for long-term memory. By default it looks for a vault at `C:\Repo\MyBrain` (Windows) via the `obsidian-brain` MCP server.
+Claudbot writes to an Obsidian vault for long-term memory. Default vault path: `C:\Repo\MyBrain`.
 
 To point it at a different vault, edit `.claudbot/.claude/settings.json`:
 
@@ -209,23 +203,18 @@ To point it at a different vault, edit `.claudbot/.claude/settings.json`:
 }
 ```
 
-Remove the `obsidian-brain` block entirely if you don't use Obsidian — everything else still works.
+Remove the `obsidian-brain` block entirely if you don't use Obsidian.
 
 ---
 
-## Provider fallback
+## Configuration files
 
-Claudbot tries providers in order and switches automatically on rate limit or quota errors:
-
-```
-Claude Code  →  (rate limit)  →  Codex CLI  →  (rate limit)  →  NIM endpoint
-```
-
-- **Claude Code**: uses your `claude.ai` subscription. No API key needed.
-- **Codex CLI**: uses your OpenAI subscription. Requires `codex` on PATH and `OPENAI_API_KEY`.
-- **NIM**: HTTP calls to NVIDIA's inference endpoints. Requires `NIM_API_KEY`.
-
-When a provider switch happens, session history is not carried over (each provider starts fresh). The switch is logged to the terminal.
+| File | What it controls |
+|------|-----------------|
+| `.claudbot/agents.yaml` | Sub-agent registry — add/remove agents here |
+| `.claudbot/CLAUDE.md` | Claude's persona, behavior rules, session checklist |
+| `.claudbot/.claude/settings.json` | MCP server declarations and tool permissions |
+| `docker-compose.yml` | Container resource limits, volume mounts, env vars |
 
 ---
 
@@ -236,16 +225,15 @@ ClaudBot/
 ├── claudbot.mjs              # Main REPL + provider orchestration
 ├── providers/
 │   ├── base.mjs              # Base class + error types
-│   ├── claude.mjs            # Claude Code CLI provider
-│   ├── codex.mjs             # OpenAI Codex CLI provider
-│   └── nim.mjs               # NVIDIA NIM HTTP provider
+│   ├── claude.mjs            # Claude Code CLI provider (primary)
+│   └── nim.mjs               # NVIDIA NIM HTTP provider (fallback)
 ├── mcp-servers/
 │   └── claudbot-exec/        # MCP server: sub-agent dispatcher
 │       └── index.mjs
 ├── .claudbot/                # Claude Code project directory
 │   ├── CLAUDE.md             # Claudbot persona + behavior rules
-│   ├── agents.yaml           # Sub-agent registry (edit to add agents)
-│   ├── skills/               # Skill files Claude reads automatically
+│   ├── agents.yaml           # Sub-agent registry (edit freely)
+│   ├── skills/               # Skill files Claude uses automatically
 │   └── .claude/
 │       └── settings.json     # MCP server declarations + permissions
 ├── workspace/                # Sandboxed file area (Docker mode)
@@ -259,7 +247,7 @@ ClaudBot/
 
 ```bash
 git pull
-npm run setup    # re-run if mcp-server deps changed
+npm run setup    # re-run if MCP server deps changed
 ```
 
 In Docker:
