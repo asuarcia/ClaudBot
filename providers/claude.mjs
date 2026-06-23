@@ -24,15 +24,29 @@ function looksLikeRateLimit(text) {
   return RATE_LIMIT_PATTERNS.some((re) => re.test(text));
 }
 
+// Maps mode names to the claude CLI flag(s) they require
+const MODE_FLAGS = {
+  full:     ["--dangerously-skip-permissions"],
+  auto:     ["--permission-mode", "auto"],
+  safe:     ["--permission-mode", "acceptEdits"],
+  readonly: ["--permission-mode", "plan"],
+};
+
 export class ClaudeProvider extends BaseProvider {
   name = "Claude Code";
+  #modeFlags;
+
+  constructor({ mode = "full" } = {}) {
+    super();
+    this.#modeFlags = MODE_FLAGS[mode] ?? MODE_FLAGS.full;
+  }
 
   async *query(prompt, { sessionId, cwd } = {}) {
     const args = [
       "-p", prompt,
       "--output-format", "stream-json",
       "--verbose",
-      "--dangerously-skip-permissions",
+      ...this.#modeFlags,
     ];
 
     if (sessionId) {

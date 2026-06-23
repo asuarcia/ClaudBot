@@ -41,6 +41,27 @@ Optional:
 
 ---
 
+## Permission modes
+
+Control what Claude is allowed to do without needing Docker:
+
+| Mode | Flag | What Claude can do |
+|------|------|--------------------|
+| `full` | *(default)* | Everything — no prompts, no restrictions |
+| `auto` | `--mode auto` | Runs safe ops automatically, asks before risky ones |
+| `safe` | `--mode safe` | Edits files freely, asks before every bash command |
+| `readonly` | `--mode readonly` | Read and plan only — no file edits, no bash |
+
+```bash
+claudbot --mode safe      # asks before any shell command
+claudbot --mode readonly  # pure read-only analysis
+claudbot                  # full autonomous (default)
+```
+
+The mode is shown in the startup banner so you always know what's active.
+
+---
+
 ## Quick start (local, no sandbox)
 
 ```bash

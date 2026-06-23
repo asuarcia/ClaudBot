@@ -30,6 +30,27 @@ import { RateLimitError } from "./providers/base.mjs";
 const CLAUDBOT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const CLAUDBOT_ROOT = path.join(CLAUDBOT_DIR, ".claudbot");
 
+// ─── CLI args ────────────────────────────────────────────────────────────────
+
+const MODES = {
+  full:        { flag: "--dangerously-skip-permissions", label: "full (no restrictions)" },
+  auto:        { flag: "--permission-mode auto",         label: "auto (asks for risky ops)" },
+  safe:        { flag: "--permission-mode acceptEdits",  label: "safe (asks before bash)" },
+  readonly:    { flag: "--permission-mode plan",         label: "readonly (no edits or bash)" },
+};
+
+function parseArgs(argv) {
+  const modeIdx = argv.indexOf("--mode");
+  const modeArg = modeIdx !== -1 ? argv[modeIdx + 1] : null;
+  if (modeArg && !MODES[modeArg]) {
+    console.error(`[claudbot] Unknown mode "${modeArg}". Valid modes: ${Object.keys(MODES).join(", ")}`);
+    process.exit(1);
+  }
+  return { mode: modeArg ?? "full" };
+}
+
+const { mode } = parseArgs(process.argv.slice(2));
+
 // ─── sanity check ────────────────────────────────────────────────────────────
 
 if (!existsSync(path.join(CLAUDBOT_ROOT, "CLAUDE.md"))) {
@@ -44,7 +65,7 @@ if (!existsSync(path.join(CLAUDBOT_ROOT, "CLAUDE.md"))) {
 // ─── provider chain ──────────────────────────────────────────────────────────
 
 const providers = [
-  new ClaudeProvider(),
+  new ClaudeProvider({ mode }),
   new CodexProvider(),
   new NimProvider(),
 ];
@@ -208,7 +229,7 @@ function printBanner() {
  ╚██████╗███████╗██║  ██║╚██████╔╝██████╔╝██████╔╝╚██████╔╝   ██║
   ╚═════╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚═════╝  ╚═════╝   ╚═╝
 `);
-  console.log(`  Autonomous agent  |  Primary: ${currentProviderName()}`);
+  console.log(`  Autonomous agent  |  Primary: ${currentProviderName()}  |  Mode: ${MODES[mode].label}`);
   console.log(`  Type your prompt and press Enter. Ctrl+C to exit.\n`);
 }
 
