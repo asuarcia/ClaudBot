@@ -1,223 +1,67 @@
 #!/usr/bin/env node
 /**
- * Claudbot — autonomous agent program
+ * Claudbot launcher
  *
- * Architecture:
- *   Primary:  Claude Code (claude -p, subscription-based, no per-token cost)
- *   Fallback: NVIDIA NIM endpoint (OpenAI-compatible HTTP, NIM_API_KEY)
- *
- * Provider switching is automatic on rate limit / quota errors.
- * Session continuity is maintained via Claude Code's --resume flag.
- *
- * Usage:
- *   node claudbot.mjs           # interactive REPL
- *   npm install -g . && claudbot
+ * Runs Claude Code interactively (full TTY, no auth issues).
+ * When Claude exits due to a rate limit, falls back to a NIM REPL.
+ * Sub-agents are handled by the claudbot-exec MCP server loaded by Claude.
  */
 
+import { spawn } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { parse as yamlParse } from "yaml";
 import readline from "node:readline";
-import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { ClaudeProvider } from "./providers/claude.mjs";
-import { NimProvider } from "./providers/nim.mjs";
-import { RateLimitError } from "./providers/base.mjs";
-
 // ─── paths ───────────────────────────────────────────────────────────────────
 
-const CLAUDBOT_DIR = path.dirname(fileURLToPath(import.meta.url));
-const CLAUDBOT_ROOT = path.join(CLAUDBOT_DIR, ".claudbot");
+const ROOT          = path.dirname(fileURLToPath(import.meta.url));
+const CLAUDBOT_ROOT = path.join(ROOT, ".claudbot");
+const RESTRICT_FILE = path.join(CLAUDBOT_ROOT, "restrictions.yaml");
 
-// ─── CLI args ────────────────────────────────────────────────────────────────
+// ─── mode flags ──────────────────────────────────────────────────────────────
 
-const MODES = {
-  full:        { flag: "--dangerously-skip-permissions", label: "full (no restrictions)" },
-  auto:        { flag: "--permission-mode auto",         label: "auto (asks for risky ops)" },
-  safe:        { flag: "--permission-mode acceptEdits",  label: "safe (asks before bash)" },
-  readonly:    { flag: "--permission-mode plan",         label: "readonly (no edits or bash)" },
+const MODE_FLAGS = {
+  full:     ["--dangerously-skip-permissions"],
+  auto:     ["--permission-mode", "auto"],
+  safe:     ["--permission-mode", "acceptEdits"],
+  readonly: ["--permission-mode", "plan"],
 };
 
-function parseArgs(argv) {
+const MODE_LABELS = {
+  full:     "full (no prompts)",
+  auto:     "auto (asks for risky ops)",
+  safe:     "safe (asks before bash)",
+  readonly: "read-only",
+};
+
+// ─── helpers ─────────────────────────────────────────────────────────────────
+
+function parseArgs() {
+  const argv = process.argv.slice(2);
   const modeIdx = argv.indexOf("--mode");
-  const modeArg = modeIdx !== -1 ? argv[modeIdx + 1] : null;
-  if (modeArg && !MODES[modeArg]) {
-    console.error(`[claudbot] Unknown mode "${modeArg}". Valid modes: ${Object.keys(MODES).join(", ")}`);
+  const mode = modeIdx !== -1 ? argv[modeIdx + 1] : (process.env.CLAUDBOT_DEFAULT_MODE ?? "full");
+  if (!MODE_FLAGS[mode]) {
+    console.error(`[claudbot] Unknown mode "${mode}". Valid: ${Object.keys(MODE_FLAGS).join(", ")}`);
     process.exit(1);
   }
-  return { mode: modeArg ?? "full" };
+  return mode;
 }
 
-const { mode } = parseArgs(process.argv.slice(2));
-
-// ─── sanity check ────────────────────────────────────────────────────────────
-
-if (!existsSync(path.join(CLAUDBOT_ROOT, "CLAUDE.md"))) {
-  console.error(
-    `[claudbot] ERROR: .claudbot/CLAUDE.md not found.\n` +
-    `  Expected: ${path.join(CLAUDBOT_ROOT, "CLAUDE.md")}\n` +
-    `  Run this from the Claudbot repo root.`
-  );
-  process.exit(1);
-}
-
-// ─── provider chain ──────────────────────────────────────────────────────────
-
-const providers = [
-  new ClaudeProvider({ mode }),
-  new NimProvider(),
-];
-
-let providerIdx = 0;
-let sessionId = null;  // Claude Code session ID for multi-turn continuity
-
-// ─── rendering ───────────────────────────────────────────────────────────────
-
-function clearLine() {
-  process.stdout.write("\r\x1b[K");
-}
-
-let spinnerTimer = null;
-const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-let spinnerIdx = 0;
-
-function startSpinner(label) {
-  spinnerTimer = setInterval(() => {
-    process.stdout.write(`\r${SPINNER[spinnerIdx++ % SPINNER.length]} ${label}`);
-  }, 80);
-}
-
-function stopSpinner() {
-  if (spinnerTimer) {
-    clearInterval(spinnerTimer);
-    spinnerTimer = null;
-    clearLine();
+function loadDisallowedTools() {
+  if (!existsSync(RESTRICT_FILE)) return [];
+  try {
+    const data = yamlParse(readFileSync(RESTRICT_FILE, "utf8"));
+    return (data?.deny ?? []).flatMap((r) => ["--disallowed-tools", String(r)]);
+  } catch {
+    return [];
   }
 }
 
-/**
- * Render a stream-json event from Claude Code.
- * Returns true if the event was meaningful (i.e., something was printed).
- */
-function renderEvent(event) {
-  switch (event.type) {
-    case "assistant": {
-      // Message from Claude: extract text content
-      const content = event.message?.content ?? [];
-      for (const block of content) {
-        if (block.type === "text") {
-          stopSpinner();
-          process.stdout.write(block.text);
-        } else if (block.type === "tool_use") {
-          stopSpinner();
-          console.log(`\n  [tool: ${block.name}]`);
-        }
-      }
-      return true;
-    }
+// ─── banner ──────────────────────────────────────────────────────────────────
 
-    case "result": {
-      stopSpinner();
-      if (event.is_error) {
-        // Error result — show the message
-        const msg = event.result ?? "Unknown error";
-        console.error(`\n[claude] ${msg}`);
-      } else {
-        // Success — text already streamed; just ensure trailing newline
-        process.stdout.write("\n");
-      }
-      return true;
-    }
-
-    case "system": {
-      if (event.subtype === "init") {
-        // Session started; spinner handles the "thinking" feedback
-        return false;
-      }
-      if (event.subtype === "error") {
-        stopSpinner();
-        console.error(`\n[claudbot] Claude error: ${event.error?.message ?? JSON.stringify(event.error)}`);
-        return true;
-      }
-      return false;
-    }
-
-    case "user": {
-      // Tool results flowing back into the context — no display needed
-      return false;
-    }
-
-    case "assistant_text": {
-      // Codex / NIM plain-text events
-      stopSpinner();
-      process.stdout.write(event.text);
-      return true;
-    }
-
-    case "text": {
-      // Raw non-JSON output from claude CLI startup
-      return false;
-    }
-
-    case "_meta": {
-      // Internal event from our ClaudeProvider — session ID update
-      return false;
-    }
-
-    default:
-      return false;
-  }
-}
-
-// ─── query with automatic provider fallback ──────────────────────────────────
-
-async function query(input) {
-  while (providerIdx < providers.length) {
-    const provider = providers[providerIdx];
-    const providerLabel = `${provider.name}`;
-
-    startSpinner(`${providerLabel} is thinking…`);
-
-    try {
-      for await (const event of provider.query(input, {
-        sessionId: providerIdx === 0 ? sessionId : undefined,
-        cwd: CLAUDBOT_ROOT,
-      })) {
-        // Capture updated session ID from Claude provider
-        if (event.type === "_meta" && event.sessionId) {
-          sessionId = event.sessionId;
-        }
-        renderEvent(event);
-      }
-      stopSpinner();
-      return; // success
-    } catch (err) {
-      stopSpinner();
-      if (err instanceof RateLimitError && providerIdx < providers.length - 1) {
-        providerIdx++;
-        const next = providers[providerIdx];
-        console.log(
-          `\n[claudbot] ${provider.name} rate limit hit. Switching to ${next.name}…`
-        );
-        // Note: session continuity is lost when switching providers
-        sessionId = null;
-        continue;
-      }
-      // Non-recoverable error
-      console.error(`\n[claudbot] ${provider.name} error: ${err.message}`);
-      if (err.stderr) console.error(err.stderr);
-      return;
-    }
-  }
-  console.error("\n[claudbot] All providers exhausted.");
-}
-
-// ─── REPL ────────────────────────────────────────────────────────────────────
-
-function currentProviderName() {
-  return providers[providerIdx]?.name ?? "none";
-}
-
-function printBanner() {
+function printBanner(mode) {
   console.log(`
   ██████╗██╗      █████╗ ██╗   ██╗██████╗ ██████╗  ██████╗ ████████╗
  ██╔════╝██║     ██╔══██╗██║   ██║██╔══██╗██╔══██╗██╔═══██╗╚══██╔══╝
@@ -226,12 +70,18 @@ function printBanner() {
  ╚██████╗███████╗██║  ██║╚██████╔╝██████╔╝██████╔╝╚██████╔╝   ██║
   ╚═════╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚═════╝  ╚═════╝   ╚═╝
 `);
-  console.log(`  Autonomous agent  |  Primary: ${currentProviderName()}  |  Mode: ${MODES[mode].label}`);
-  console.log(`  Type your prompt and press Enter. Ctrl+C to exit.\n`);
+  console.log(`  Mode: ${MODE_LABELS[mode]}  |  Backend: Claude Code  |  Fallback: NIM`);
+  console.log(`  Sub-agents: claudbot-exec MCP  |  Memory: Obsidian\n`);
 }
 
-async function repl() {
-  printBanner();
+// ─── NIM fallback REPL ───────────────────────────────────────────────────────
+
+async function nimRepl() {
+  const { NimProvider } = await import("./providers/nim.mjs");
+  const nim = new NimProvider();
+
+  console.log("\n[claudbot] NIM fallback active. Claude Code hit its rate limit.");
+  console.log("           Type prompts below, or Ctrl+C to exit.\n");
 
   const rl = readline.createInterface({
     input: process.stdin,
@@ -239,21 +89,26 @@ async function repl() {
     terminal: true,
   });
 
-  // Forward SIGINT cleanly
   rl.on("SIGINT", () => {
     console.log("\n[claudbot] Bye.");
     process.exit(0);
   });
 
   const prompt = () => {
-    const providerTag = `(${currentProviderName().toLowerCase().replace(/\s+/g, "-")})`;
-    rl.question(`\n claudbot ${providerTag}> `, async (input) => {
+    rl.question(" claudbot (nim)> ", async (input) => {
       const trimmed = input.trim();
-      if (!trimmed) {
-        prompt();
-        return;
+      if (!trimmed) { prompt(); return; }
+
+      process.stdout.write("\n");
+      try {
+        for await (const event of nim.query(trimmed)) {
+          if (event.type === "assistant_text") process.stdout.write(event.text);
+          if (event.type === "text")           process.stdout.write(event.text);
+        }
+      } catch (err) {
+        console.error(`\n[nim] Error: ${err.message}`);
       }
-      await query(trimmed);
+      process.stdout.write("\n");
       prompt();
     });
   };
@@ -261,9 +116,56 @@ async function repl() {
   prompt();
 }
 
-// ─── entry point ─────────────────────────────────────────────────────────────
+// ─── main ────────────────────────────────────────────────────────────────────
 
-repl().catch((err) => {
+async function main() {
+  if (!existsSync(path.join(CLAUDBOT_ROOT, "CLAUDE.md"))) {
+    console.error(
+      `[claudbot] .claudbot/CLAUDE.md not found.\n` +
+      `  Run from the Claudbot repo root, or run: npm run onboard`
+    );
+    process.exit(1);
+  }
+
+  const mode = parseArgs();
+  printBanner(mode);
+
+  const args = [
+    ...MODE_FLAGS[mode],
+    ...loadDisallowedTools(),
+  ];
+
+  // Spawn Claude Code with the real terminal — stdio: inherit gives it a proper
+  // TTY so auth reads from ~/.claude/credentials with no subprocess weirdness.
+  const claude = spawn("claude", args, {
+    cwd: CLAUDBOT_ROOT,
+    stdio: "inherit",
+    env: process.env,
+  });
+
+  claude.on("error", (err) => {
+    if (err.code === "ENOENT") {
+      console.error("\n[claudbot] `claude` not found. Install it:");
+      console.error("  npm install -g @anthropic-ai/claude-code");
+    } else {
+      console.error(`\n[claudbot] Failed to start Claude Code: ${err.message}`);
+    }
+    process.exit(1);
+  });
+
+  claude.on("exit", async (code, signal) => {
+    // Clean exit (user typed /exit or Ctrl+C)
+    if (signal === "SIGINT" || code === 0) {
+      process.exit(0);
+    }
+
+    // Non-zero exit usually means rate limit or auth error — offer NIM
+    console.log(`\n[claudbot] Claude Code exited (code ${code}).`);
+    await nimRepl();
+  });
+}
+
+main().catch((err) => {
   console.error("[claudbot] Fatal:", err);
   process.exit(1);
 });
