@@ -1,7 +1,9 @@
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
+import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parse as yamlParse } from "yaml";
 import { BaseProvider, RateLimitError, ProviderError } from "./base.mjs";
 
 const CLAUDBOT_ROOT = path.join(
@@ -22,6 +24,19 @@ const RATE_LIMIT_PATTERNS = [
 
 function looksLikeRateLimit(text) {
   return RATE_LIMIT_PATTERNS.some((re) => re.test(text));
+}
+
+const RESTRICT_FILE = path.join(CLAUDBOT_ROOT, "restrictions.yaml");
+
+/** Load deny rules from restrictions.yaml, returning flat CLI arg pairs */
+function loadDisallowedTools() {
+  if (!existsSync(RESTRICT_FILE)) return [];
+  try {
+    const data = yamlParse(readFileSync(RESTRICT_FILE, "utf8"));
+    return (data?.deny ?? []).flatMap((rule) => ["--disallowed-tools", String(rule)]);
+  } catch {
+    return [];
+  }
 }
 
 // Maps mode names to the claude CLI flag(s) they require
@@ -47,6 +62,7 @@ export class ClaudeProvider extends BaseProvider {
       "--output-format", "stream-json",
       "--verbose",
       ...this.#modeFlags,
+      ...loadDisallowedTools(),
     ];
 
     if (sessionId) {

@@ -39,19 +39,38 @@ Optional:
 
 ---
 
-## Quick start (local, no sandbox)
+## Installation
 
 ```bash
 git clone https://github.com/asuarcia/ClaudBot
 cd ClaudBot
-npm run setup        # installs MCP server dependencies
-node claudbot.mjs    # start the REPL
+npm run setup      # install dependencies
+npm run onboard    # interactive setup wizard
 ```
 
-Or install globally so you can run `claudbot` from anywhere:
+The onboarding wizard walks you through:
+1. **Risk acknowledgment** — understand what autonomous mode means
+2. **Claude Code auth** — log in to your Claude subscription
+3. **NIM API key** — for fallback + sub-agent inference
+4. **Obsidian vault** — optional long-term memory
+5. **Sub-agents** — create as many as you want (name, endpoint, model, description)
+6. **Channels** — connect Discord, Telegram, Slack, or WhatsApp
+7. **Restrictions** — hard-block specific commands or file paths
+8. **Permission mode** — choose your default autonomy level
+9. **Health check** — verify everything is working
+
+After onboarding, start Claudbot:
+
+```bash
+source .env          # load API keys written by onboarding
+node claudbot.mjs
+```
+
+Or install globally:
 
 ```bash
 npm install -g .
+source .env
 claudbot
 ```
 
