@@ -1,0 +1,71 @@
+# Claudbot restriction rules
+# These are enforced even in full-autonomous mode — Claude cannot execute a denied pattern.
+# Remove any line to lift that restriction.
+
+deny:
+  # ── Destructive file operations ────────────────────────────────────────────
+  - "Bash(rm -rf *)"
+  - "Bash(del /f /s /q *)"
+  - "Bash(rd /s /q *)"
+  - "Bash(Remove-Item -Recurse -Force *)"
+
+  # ── Disk / boot ────────────────────────────────────────────────────────────
+  - "Bash(format *)"
+  - "Bash(diskpart *)"
+  - "Bash(dd *)"
+  - "Bash(bcdedit *)"
+
+  # ── System control ─────────────────────────────────────────────────────────
+  - "Bash(shutdown *)"
+  - "Bash(Restart-Computer *)"
+  - "Bash(Stop-Computer *)"
+  - "Bash(taskkill *)"
+
+  # ── Services & user accounts ───────────────────────────────────────────────
+  - "Bash(sc delete *)"
+  - "Bash(sc stop *)"
+  - "Bash(net user *)"
+  - "Bash(net localgroup *)"
+
+  # ── Registry ───────────────────────────────────────────────────────────────
+  - "Bash(reg delete *)"
+  - "Bash(reg add *)"
+  - "Bash(regedit *)"
+
+  # ── Scheduled tasks & permissions ──────────────────────────────────────────
+  - "Bash(schtasks /create *)"
+  - "Bash(schtasks /delete *)"
+  - "Bash(icacls *)"
+  - "Bash(takeown *)"
+
+  # ── Remote code execution ──────────────────────────────────────────────────
+  - "Bash(curl * | bash)"
+  - "Bash(curl * | sh)"
+  - "Bash(wget * | bash)"
+  - "Bash(wget * -O- | sh)"
+  - "Bash(iex *)"
+  - "Bash(Invoke-Expression *)"
+
+  # ── Git guardrails ─────────────────────────────────────────────────────────
+  - "Bash(git push --force *)"
+  - "Bash(git push -f *)"
+  - "Bash(git reset --hard *)"
+
+  # ── Publishing ─────────────────────────────────────────────────────────────
+  - "Bash(npm publish *)"
+  - "Bash(winget install *)"
+  - "Bash(choco install *)"
+
+  # ── System paths ───────────────────────────────────────────────────────────
+  - "Edit(C:/Windows/*)"
+  - "Write(C:/Windows/*)"
+  - "Edit(C:/Program Files/*)"
+  - "Write(C:/Program Files/*)"
+  - "Write(C:/Users/*/AppData/Roaming/*)"
+  - "Write(C:/Users/*/AppData/Local/*)"
+
+  # ── Credentials ────────────────────────────────────────────────────────────
+  - "Edit(C:/Users/*/.ssh/*)"
+  - "Write(C:/Users/*/.ssh/*)"
+  - "Write(C:/Users/*/.aws/*)"
+  - "Write(C:/Users/*/.claude*)"
