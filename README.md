@@ -29,6 +29,7 @@ All commands go through `claudbot`:
 |---------|-------------|
 | `claudbot` | Start the agent (default mode) |
 | `claudbot start --mode auto` | Start with a specific permission mode |
+| `claudbot restart` | Restart the running agent without closing the terminal |
 | `claudbot channels` | Start the WhatsApp / Telegram webhook server |
 | `claudbot dream` | Run background tasks once (memory, research, reflection) |
 | `claudbot dream --watch` | Run background tasks on a continuous schedule |
@@ -220,17 +221,9 @@ Pulls the latest code from GitHub, shows what changed, and reinstalls dependenci
 
 ---
 
-## Sandboxed mode (Docker)
+## Extra isolation (optional)
 
-Run Claudbot in an isolated Linux container with no access to your host filesystem outside `workspace/`.
-
-```bash
-docker compose build
-docker compose run claudbot claude auth login   # first time only
-docker compose up
-```
-
-Drop files into `workspace/` — it's mounted into the container at `/workspace`. Resource limits default to 2 CPU / 2 GB RAM; edit `docker-compose.yml` to change them.
+The built-in restrictions cover the critical safety rules. If you want stronger isolation — for example letting Claudbot work in a fully sandboxed environment — run it inside a VM or a Docker container. That way it can't touch anything outside the container regardless of what it tries. This is worth doing if you're using full-autonomous mode on sensitive machines.
 
 ---
 
@@ -271,8 +264,5 @@ ClaudBot/
 │   ├── dream-tasks.yaml      # Dream task config (auto-generated)
 │   └── .claude/
 │       └── settings.json     # MCP trust + tool permissions
-├── .env                      # API keys (gitignored)
-├── workspace/                # Docker bind mount
-├── Dockerfile
-└── docker-compose.yml
+└── .env                      # API keys (gitignored)
 ```

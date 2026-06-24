@@ -16,7 +16,7 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { parse as yamlParse } from "yaml";
 import readline from "node:readline";
 import path from "node:path";
@@ -24,9 +24,11 @@ import { fileURLToPath } from "node:url";
 
 // ─── paths ───────────────────────────────────────────────────────────────────
 
-const ROOT          = path.dirname(fileURLToPath(import.meta.url));
-const CLAUDBOT_ROOT = path.join(ROOT, ".claudbot");
-const RESTRICT_FILE = path.join(CLAUDBOT_ROOT, "restrictions.yaml");
+const ROOT           = path.dirname(fileURLToPath(import.meta.url));
+const CLAUDBOT_ROOT  = path.join(ROOT, ".claudbot");
+const RESTRICT_FILE  = path.join(CLAUDBOT_ROOT, "restrictions.yaml");
+const PID_FILE       = path.join(CLAUDBOT_ROOT, ".pid");       // claude child PID
+const RESTART_FLAG   = path.join(CLAUDBOT_ROOT, ".restart");   // restart requested
 
 // ─── mode flags ──────────────────────────────────────────────────────────────
 
@@ -118,6 +120,7 @@ function cmdHelp() {
   Commands:
     start              Launch the agent  (default when no command given)
       --mode <mode>    Permission mode: full | auto | safe | readonly
+    restart            Restart the running agent without closing the terminal
     channels           Start WhatsApp / Telegram webhook server
     dream              Run background tasks once
     dream --watch      Run background tasks on a schedule
@@ -129,6 +132,7 @@ function cmdHelp() {
   Examples:
     claudbot
     claudbot start --mode auto
+    claudbot restart
     claudbot channels
     claudbot dream --watch
     claudbot update
@@ -288,6 +292,37 @@ async function nimRepl() {
   prompt();
 }
 
+// ─── restart command ─────────────────────────────────────────────────────────
+
+function cmdRestart() {
+  if (!existsSync(PID_FILE)) {
+    console.error("[claudbot] No running instance found. Start one with: claudbot");
+    process.exit(1);
+  }
+
+  const pid = parseInt(readFileSync(PID_FILE, "utf8").trim(), 10);
+  if (!pid || isNaN(pid)) {
+    console.error("[claudbot] PID file is invalid. Start a fresh instance: claudbot");
+    process.exit(1);
+  }
+
+  // Drop the restart flag so the running instance knows to restart instead of exit
+  writeFileSync(RESTART_FLAG, "");
+
+  try {
+    process.kill(pid, "SIGTERM");
+    console.log(`[claudbot] Restart signal sent (PID ${pid}). Watch the other terminal.`);
+  } catch (err) {
+    rmSync(RESTART_FLAG, { force: true });
+    if (err.code === "ESRCH") {
+      console.error("[claudbot] Process not found — it may have already exited. Run: claudbot");
+    } else {
+      console.error(`[claudbot] Could not signal process: ${err.message}`);
+    }
+    process.exit(1);
+  }
+}
+
 // ─── start command ───────────────────────────────────────────────────────────
 
 async function cmdStart(argv) {
@@ -306,23 +341,52 @@ async function cmdStart(argv) {
   patchSettings();
   printBanner(modeArg);
 
-  const args = [...MODE_FLAGS[modeArg], ...loadDisallowedTools()];
-  const claude = spawn("claude", args, { cwd: CLAUDBOT_ROOT, stdio: "inherit", env: process.env });
+  const claudeArgs = [...MODE_FLAGS[modeArg], ...loadDisallowedTools()];
 
-  claude.on("error", (err) => {
-    if (err.code === "ENOENT") {
-      console.error("\n[claudbot] `claude` not found. Install: npm install -g @anthropic-ai/claude-code");
-    } else {
-      console.error(`\n[claudbot] Failed to start: ${err.message}`);
-    }
-    process.exit(1);
-  });
+  // Spawn Claude and keep restarting whenever the restart flag is set
+  const startClaude = async () => {
+    const claude = spawn("claude", claudeArgs, {
+      cwd: CLAUDBOT_ROOT,
+      stdio: "inherit",
+      env: process.env,
+    });
 
-  claude.on("exit", async (code, signal) => {
-    if (signal === "SIGINT" || code === 0) process.exit(0);
-    console.log(`\n[claudbot] Claude Code exited (code ${code}). Switching to NIM fallback…`);
-    await nimRepl();
-  });
+    // Write PID so `claudbot restart` can signal this process
+    try { writeFileSync(PID_FILE, String(claude.pid)); } catch { /* non-fatal */ }
+
+    claude.on("error", (err) => {
+      rmSync(PID_FILE, { force: true });
+      if (err.code === "ENOENT") {
+        console.error("\n[claudbot] `claude` not found. Install: npm install -g @anthropic-ai/claude-code");
+      } else {
+        console.error(`\n[claudbot] Failed to start: ${err.message}`);
+      }
+      process.exit(1);
+    });
+
+    claude.on("exit", async (code, signal) => {
+      rmSync(PID_FILE, { force: true });
+
+      // Restart requested from another terminal
+      if (existsSync(RESTART_FLAG)) {
+        rmSync(RESTART_FLAG, { force: true });
+        console.log("\n[claudbot] Restarting…\n");
+        return startClaude();
+      }
+
+      // Clean exit — user typed /exit or Ctrl+C
+      if (signal === "SIGINT" || code === 0) process.exit(0);
+
+      // Unexpected exit — rate limit or error, fall back to NIM
+      console.log(`\n[claudbot] Claude Code exited (code ${code}). Switching to NIM fallback…`);
+      await nimRepl();
+    });
+  };
+
+  // Clean up stale files from a previous run
+  rmSync(RESTART_FLAG, { force: true });
+
+  await startClaude();
 }
 
 // ─── router ──────────────────────────────────────────────────────────────────
@@ -336,11 +400,12 @@ async function main() {
 
   switch (cmd) {
     case "start":    return cmdStart(rest);
+    case "restart":  return cmdRestart();
     case "channels": return runScript("channel-server.mjs", rest);
     case "dream":    return runScript("dream.mjs", rest);
     case "onboard":  return runScript("scripts/onboard.mjs", rest);
     case "update":   return cmdUpdate();
-    case "doctor":   loadDotEnv(); return cmdDoctor();
+    case "doctor":   return cmdDoctor();
     case "help":
     case "--help":
     case "-h":       return cmdHelp();

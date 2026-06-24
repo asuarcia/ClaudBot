@@ -8,3 +8,5 @@ workspace/*
 .claudbot/channels.yaml
 .claudbot/dream-log.md
 .claudbot/channel-log.md
+.claudbot/.pid
+.claudbot/.restart
