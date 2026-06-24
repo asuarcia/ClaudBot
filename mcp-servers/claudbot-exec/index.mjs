@@ -16,13 +16,29 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { parse } from "yaml";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REGISTRY_PATH = path.join(__dirname, "../../.claudbot/agents.yaml");
+
+// Load .env so API keys reach sub-agents even if the shell didn't source it
+function loadDotEnv() {
+  const envPath = path.join(__dirname, "../../.env");
+  if (!existsSync(envPath)) return;
+  try {
+    for (const line of readFileSync(envPath, "utf8").split("\n")) {
+      const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+      if (m && !process.env[m[1]]) process.env[m[1]] = m[2].trim();
+    }
+  } catch { /* non-fatal */ }
+}
+loadDotEnv();
+
+// Safe agent name: lowercase letters, numbers, hyphens only
+const SAFE_NAME = /^[a-z0-9-]{1,64}$/;
 
 function loadRegistry() {
   const raw = readFileSync(REGISTRY_PATH, "utf8");
@@ -31,6 +47,7 @@ function loadRegistry() {
 }
 
 function findAgent(name) {
+  if (!SAFE_NAME.test(name)) throw new Error(`Invalid agent name "${name}"`);
   const agents = loadRegistry();
   const agent = agents.find((a) => a.name === name);
   if (!agent) {

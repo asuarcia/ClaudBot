@@ -5,3 +5,6 @@ workspace/*
 !workspace/.gitkeep
 *.log
 .env
+.claudbot/channels.yaml
+.claudbot/dream-log.md
+.claudbot/channel-log.md

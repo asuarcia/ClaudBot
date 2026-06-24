@@ -78,6 +78,18 @@ function patchSettings() {
   writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
 }
 
+// Load .env into process.env so Claude Code and its MCP servers inherit API keys
+function loadDotEnv() {
+  const envPath = path.join(ROOT, ".env");
+  if (!existsSync(envPath)) return;
+  try {
+    for (const line of readFileSync(envPath, "utf8").split("\n")) {
+      const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+      if (m && !process.env[m[1]]) process.env[m[1]] = m[2].trim();
+    }
+  } catch { /* non-fatal */ }
+}
+
 function parseArgs() {
   const argv = process.argv.slice(2);
   const modeIdx = argv.indexOf("--mode");
@@ -167,6 +179,7 @@ async function main() {
     process.exit(1);
   }
 
+  loadDotEnv();
   const mode = parseArgs();
   patchSettings();
   printBanner(mode);
