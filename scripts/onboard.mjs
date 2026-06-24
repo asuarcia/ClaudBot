@@ -35,6 +35,7 @@ const AGENTS_FILE   = path.join(CLAUDBOT_DIR, "agents.yaml");
 const CHANNELS_FILE = path.join(CLAUDBOT_DIR, "channels.yaml");
 const RESTRICT_FILE = path.join(CLAUDBOT_DIR, "restrictions.yaml");
 const SETTINGS_FILE = path.join(CLAUDBOT_DIR, ".claude", "settings.json");
+const MCP_JSON_FILE = path.join(CLAUDBOT_DIR, ".mcp.json");
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -70,6 +71,37 @@ function writeEnv(key, value) {
 function readYaml(filePath, defaultVal) {
   try { return yamlParse(readFileSync(filePath, "utf8")) ?? defaultVal; }
   catch { return defaultVal; }
+}
+
+function readJson(filePath, defaultVal) {
+  try { return JSON.parse(readFileSync(filePath, "utf8")); }
+  catch { return defaultVal; }
+}
+
+/**
+ * Register (or remove) a project-scoped MCP server.
+ *
+ * Claude Code ignores the `mcpServers` field in settings.json — project MCP
+ * servers must live in `.mcp.json` at the working directory and be listed in
+ * settings.json `enabledMcpjsonServers` to load without a trust prompt. The
+ * launcher (claudbot.mjs) follows the same convention, so the two stay in sync.
+ */
+function setMcpServer(name, config /* null to remove */) {
+  const mcp = readJson(MCP_JSON_FILE, {});
+  mcp.mcpServers = mcp.mcpServers ?? {};
+  if (config) mcp.mcpServers[name] = config;
+  else        delete mcp.mcpServers[name];
+  mkdirSync(path.dirname(MCP_JSON_FILE), { recursive: true });
+  writeFileSync(MCP_JSON_FILE, JSON.stringify(mcp, null, 2));
+
+  const settings = readJson(SETTINGS_FILE, {});
+  delete settings.mcpServers; // legacy field Claude Code ignores
+  const enabled = new Set(settings.enabledMcpjsonServers ?? []);
+  if (config) enabled.add(name);
+  else        enabled.delete(name);
+  settings.enabledMcpjsonServers = [...enabled];
+  mkdirSync(path.dirname(SETTINGS_FILE), { recursive: true });
+  writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
 }
 
 // ─── banner ──────────────────────────────────────────────────────────────────
@@ -245,13 +277,8 @@ async function stepObsidian() {
     ],
   }));
 
-  const settings = readYaml(SETTINGS_FILE, {});
-  settings.mcpServers = settings.mcpServers ?? {};
-
   if (hasVault === "skip") {
-    delete settings.mcpServers["obsidian-brain"];
-    mkdirSync(path.dirname(SETTINGS_FILE), { recursive: true });
-    writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
+    setMcpServer("obsidian-brain", null);
     p.log.info("Skipping memory vault. Add it later by running: claudbot onboard");
     return { vaultPath: null, newBrain: false };
   }
@@ -271,12 +298,10 @@ async function stepObsidian() {
       },
     }));
 
-    settings.mcpServers["obsidian-brain"] = {
+    setMcpServer("obsidian-brain", {
       command: "npx",
       args: ["-y", "mcp-obsidian", vaultPath.trim()],
-    };
-    mkdirSync(path.dirname(SETTINGS_FILE), { recursive: true });
-    writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
+    });
     p.log.success(`Connected vault: ${vaultPath.trim()}`);
     return { vaultPath: vaultPath.trim(), newBrain: false };
   }
@@ -333,12 +358,10 @@ async function stepObsidian() {
   );
 
   // Wire up the MCP server
-  settings.mcpServers["obsidian-brain"] = {
+  setMcpServer("obsidian-brain", {
     command: "npx",
     args: ["-y", "mcp-obsidian", vaultPath],
-  };
-  mkdirSync(path.dirname(SETTINGS_FILE), { recursive: true });
-  writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
+  });
 
   p.log.success(`Brain created at: ${vaultPath}`);
   return { vaultPath, newBrain: true };
@@ -458,8 +481,10 @@ async function setupDiscord() {
 async function setupTelegram() {
   p.note("Message @BotFather on Telegram to create a bot.", "Telegram");
   const token  = checkCancel(await p.password({ message: "Bot token:" }));
-  const chatId = checkCancel(await p.text({ message: "Chat ID:" }));
+  const chatId = checkCancel(await p.text({ message: "Your chat ID (only this chat will be answered):" }));
   writeEnv("TELEGRAM_BOT_TOKEN", token.trim());
+  // Secure by default: restrict replies to the owner's chat
+  if (chatId.trim()) writeEnv("TELEGRAM_ALLOWED_CHAT_IDS", chatId.trim());
   return { type: "telegram", chatId: chatId.trim(), tokenEnv: "TELEGRAM_BOT_TOKEN" };
 }
 
@@ -476,22 +501,31 @@ async function setupWhatsApp() {
   const sid   = checkCancel(await p.text({ message: "Twilio Account SID:" }));
   const token = checkCancel(await p.password({ message: "Twilio Auth Token:" }));
   const from  = checkCancel(await p.text({ message: "From number (whatsapp:+14155238886):" }));
-  const to    = checkCancel(await p.text({ message: "Your WhatsApp number (whatsapp:+1…):" }));
+  const to    = checkCancel(await p.text({ message: "Your WhatsApp number — only this number will be answered (whatsapp:+1…):" }));
   writeEnv("TWILIO_ACCOUNT_SID", sid.trim());
   writeEnv("TWILIO_AUTH_TOKEN", token.trim());
+  writeEnv("TWILIO_WHATSAPP_FROM", from.trim());
+  // Secure by default: restrict replies to the owner's number
+  if (to.trim()) writeEnv("WHATSAPP_ALLOWED_NUMBERS", to.trim());
   return { type: "whatsapp", from: from.trim(), to: to.trim(), sidEnv: "TWILIO_ACCOUNT_SID", tokenEnv: "TWILIO_AUTH_TOKEN" };
 }
 
 async function stepChannels() {
   p.log.step("Channel connections (optional)");
 
+  p.note(
+    "WhatsApp and Telegram are live — run `claudbot channels` to start them.\n" +
+    "Discord and Slack credentials are stored for future use.",
+    "Channels"
+  );
+
   const selected = checkCancel(await p.multiselect({
     message: "Connect messaging channels:",
     options: [
-      { value: "discord",  label: "Discord" },
-      { value: "telegram", label: "Telegram" },
-      { value: "slack",    label: "Slack" },
-      { value: "whatsapp", label: "WhatsApp  (via Twilio)" },
+      { value: "whatsapp", label: "WhatsApp  (via Twilio)", hint: "live" },
+      { value: "telegram", label: "Telegram",               hint: "live" },
+      { value: "discord",  label: "Discord",                hint: "stored for future use" },
+      { value: "slack",    label: "Slack",                  hint: "stored for future use" },
     ],
     required: false,
   }));
@@ -650,13 +684,13 @@ async function stepPermissionMode() {
 // ─── step 9: finalize settings ───────────────────────────────────────────────
 
 async function stepFinalizeSettings() {
-  const settings = readYaml(SETTINGS_FILE, {});
-  settings.mcpServers = settings.mcpServers ?? {};
-  settings.mcpServers["claudbot-exec"] = {
-    command: "node",
-    args: ["../../mcp-servers/claudbot-exec/index.mjs"],
-    env: {},
-  };
+  // Register the sub-agent dispatcher with an absolute path so it loads no
+  // matter where the repo lives. (The launcher re-asserts this on every start.)
+  const execPath = path.join(ROOT, "mcp-servers", "claudbot-exec", "index.mjs");
+  setMcpServer("claudbot-exec", { command: "node", args: [execPath], env: {} });
+
+  // Default tool permissions (only set if not already configured)
+  const settings = readJson(SETTINGS_FILE, {});
   settings.permissions = settings.permissions ?? {};
   if (!settings.permissions.allow?.length) {
     settings.permissions.allow = [
@@ -664,7 +698,6 @@ async function stepFinalizeSettings() {
       "Glob(*)", "Grep(*)", "WebSearch(*)", "WebFetch(*)",
     ];
   }
-
   mkdirSync(path.dirname(SETTINGS_FILE), { recursive: true });
   writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
 

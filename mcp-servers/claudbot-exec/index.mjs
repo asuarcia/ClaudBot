@@ -41,9 +41,13 @@ loadDotEnv();
 const SAFE_NAME = /^[a-z0-9-]{1,64}$/;
 
 function loadRegistry() {
-  const raw = readFileSync(REGISTRY_PATH, "utf8");
-  const parsed = parse(raw);
-  return parsed?.agents ?? [];
+  if (!existsSync(REGISTRY_PATH)) return [];
+  try {
+    const parsed = parse(readFileSync(REGISTRY_PATH, "utf8"));
+    return Array.isArray(parsed?.agents) ? parsed.agents : [];
+  } catch {
+    return [];
+  }
 }
 
 function findAgent(name) {
@@ -57,16 +61,20 @@ function findAgent(name) {
   return agent;
 }
 
-async function callAgent(agent, prompt, systemPrompt) {
-  const apiKey =
-    agent.apiKeyEnv && agent.apiKeyEnv !== "null"
-      ? process.env[agent.apiKeyEnv]
-      : "none";
+const REQUEST_TIMEOUT_MS = 120_000; // 2 min — don't hang Claude forever
 
-  if (agent.apiKeyEnv && agent.apiKeyEnv !== "null" && !apiKey) {
+async function callAgent(agent, prompt, systemPrompt) {
+  if (!agent.endpoint || typeof agent.endpoint !== "string") {
+    throw new Error(`Agent "${agent.name}" has no valid endpoint configured.`);
+  }
+
+  const needsKey = agent.apiKeyEnv && agent.apiKeyEnv !== "null";
+  const apiKey = needsKey ? process.env[agent.apiKeyEnv] : null;
+
+  if (needsKey && !apiKey) {
     throw new Error(
       `API key env var "${agent.apiKeyEnv}" is not set. ` +
-        `Export it before running claudbot.`
+        `Add it to .env before running claudbot.`
     );
   }
 
@@ -78,17 +86,28 @@ async function callAgent(agent, prompt, systemPrompt) {
   if (system) messages.push({ role: "system", content: system });
   messages.push({ role: "user", content: prompt });
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: agent.model,
-      messages,
-    }),
-  });
+  const headers = { "Content-Type": "application/json" };
+  if (apiKey) headers.Authorization = `Bearer ${apiKey}`; // omit for local/keyless
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  let res;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ model: agent.model, messages }),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (err.name === "AbortError") {
+      throw new Error(`Agent "${agent.name}" timed out after ${REQUEST_TIMEOUT_MS / 1000}s.`);
+    }
+    throw new Error(`Agent "${agent.name}" request failed: ${err.message}`);
+  } finally {
+    clearTimeout(timer);
+  }
 
   if (!res.ok) {
     const text = await res.text().catch(() => "(no body)");
@@ -168,6 +187,9 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   }
 
   if (name === "run_agent") {
+    if (typeof args?.name !== "string" || typeof args?.prompt !== "string" || !args.prompt.trim()) {
+      throw new Error("run_agent requires a string 'name' and a non-empty 'prompt'.");
+    }
     const agent = findAgent(args.name);
     const result = await callAgent(agent, args.prompt, args.systemPrompt);
     return {

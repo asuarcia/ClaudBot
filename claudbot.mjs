@@ -316,12 +316,31 @@ function startSpinner(model) {
   };
 }
 
+// Build the system message from the Claudbot persona, if present
+function loadPersona() {
+  const personaPath = path.join(CLAUDBOT_ROOT, "CLAUDE.md");
+  if (!existsSync(personaPath)) return null;
+  try { return readFileSync(personaPath, "utf8"); } catch { return null; }
+}
+
 async function nimRepl() {
   const { NimProvider } = await import("./providers/nim.mjs");
   const nim = new NimProvider();
   const model = process.env.NIM_MODEL ?? "nim";
 
+  if (!nim.isConfigured) {
+    console.error(
+      `\n  ${C.yellow}⚠${C.reset}  NIM fallback is not configured (NIM_API_KEY missing).\n` +
+      `      Run ${C.cyan}claudbot onboard${C.reset} to set it up, then restart.\n`
+    );
+    process.exit(1);
+  }
+
   nimBanner();
+
+  // Conversation history so the fallback feels continuous, not amnesiac
+  const persona = loadPersona();
+  const history = persona ? [{ role: "system", content: persona }] : [];
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
   rl.on("SIGINT", () => {
@@ -333,13 +352,18 @@ async function nimRepl() {
     rl.question(`  ${C.yellow}${C.bold}⚡ claudbot${C.reset} ${C.dim}(nim)${C.reset} ${C.bold}›${C.reset} `, async (input) => {
       const trimmed = input.trim();
       if (!trimmed) { prompt(); return; }
+      if (["/exit", "/quit", "exit", "quit"].includes(trimmed.toLowerCase())) {
+        console.log(`\n  ${C.dim}Bye.${C.reset}\n`);
+        process.exit(0);
+      }
 
       console.log();
       const stopSpinner = startSpinner(model);
       let firstChunk = true;
+      let reply = "";
 
       try {
-        for await (const event of nim.query(trimmed)) {
+        for await (const event of nim.query(trimmed, { history })) {
           const text = event.type === "assistant_text" || event.type === "text" ? event.text : null;
           if (!text) continue;
           if (firstChunk) {
@@ -347,11 +371,15 @@ async function nimRepl() {
             process.stdout.write(`  ${C.dim}${"─".repeat(58)}${C.reset}\n  `);
             firstChunk = false;
           }
-          // Indent wrapped lines
-          process.stdout.write(text.replace(/\n/g, "\n  "));
+          reply += text;
+          process.stdout.write(text.replace(/\n/g, "\n  ")); // indent wrapped lines
         }
         if (!firstChunk) {
           process.stdout.write(`\n  ${C.dim}${"─".repeat(58)}${C.reset}\n`);
+          // Keep the exchange in history (trim to avoid unbounded growth)
+          history.push({ role: "user", content: trimmed });
+          history.push({ role: "assistant", content: reply });
+          while (history.length > 21) history.splice(persona ? 1 : 0, 2);
         }
       } catch (err) {
         stopSpinner();

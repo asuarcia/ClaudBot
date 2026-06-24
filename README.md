@@ -148,6 +148,21 @@ And for Telegram:
 TELEGRAM_BOT_TOKEN=xxxxxxxxxxxx
 ```
 
+### Locking it down (recommended)
+
+A public webhook is an open door to a paid API. Onboarding sets these automatically from your own number/chat, but you can edit them in `.env`:
+
+```
+# Only these senders get answered (comma-separated). Leave unset = anyone.
+WHATSAPP_ALLOWED_NUMBERS=whatsapp:+15551234567
+TELEGRAM_ALLOWED_CHAT_IDS=12345678
+
+# Optional: require Telegram's secret-token header (set via setWebhook)
+TELEGRAM_WEBHOOK_SECRET=some-long-random-string
+```
+
+WhatsApp requests are additionally verified with Twilio's HMAC signature, and unknown senders are rejected before any API call. The server warns at startup if a channel is left open with no allowlist.
+
 Register the webhook URLs in your provider dashboard:
 
 ```
@@ -250,7 +265,6 @@ ClaudBot/
 ├── dream.mjs                 # Background autonomous tasks
 ├── providers/
 │   ├── base.mjs              # Base class + error types
-│   ├── claude.mjs            # Claude Code provider
 │   └── nim.mjs               # NIM HTTP provider (fallback)
 ├── scripts/
 │   └── onboard.mjs           # Interactive setup wizard

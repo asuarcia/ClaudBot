@@ -1,7 +1,0 @@
-node_modules/
-openclaw-main/
-NemoClaw-main/
-workspace/
-.git/
-*.log
-.env

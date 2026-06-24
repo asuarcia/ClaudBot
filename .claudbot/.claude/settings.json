@@ -12,6 +12,7 @@
     ]
   },
   "enabledMcpjsonServers": [
-    "claudbot-exec"
+    "claudbot-exec",
+    "obsidian-brain"
   ]
 }

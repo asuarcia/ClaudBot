@@ -1,10 +1,18 @@
+# dependencies
 node_modules/
+
+# reference repos (not part of Claudbot)
 openclaw-main/
 NemoClaw-main/
-workspace/*
-!workspace/.gitkeep
+
+# logs
 *.log
+
+# secrets — never commit
 .env
+
+# generated / runtime files (machine-specific paths, regenerated on launch)
+.claudbot/.mcp.json
 .claudbot/channels.yaml
 .claudbot/dream-log.md
 .claudbot/channel-log.md

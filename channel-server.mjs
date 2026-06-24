@@ -20,7 +20,6 @@
 import express from "express";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync, appendFileSync, mkdirSync } from "node:fs";
-import { parse as yamlParse } from "yaml";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -29,7 +28,6 @@ import { fileURLToPath } from "node:url";
 const ROOT          = path.dirname(fileURLToPath(import.meta.url));
 const CLAUDBOT_ROOT = path.join(ROOT, ".claudbot");
 const CLAUDE_MD     = path.join(CLAUDBOT_ROOT, "CLAUDE.md");
-const CHANNELS_FILE = path.join(CLAUDBOT_ROOT, "channels.yaml");
 const LOG_FILE      = path.join(CLAUDBOT_ROOT, "channel-log.md");
 
 // ─── env loading ─────────────────────────────────────────────────────────────
@@ -37,21 +35,45 @@ const LOG_FILE      = path.join(CLAUDBOT_ROOT, "channel-log.md");
 function loadDotEnv() {
   const envPath = path.join(ROOT, ".env");
   if (!existsSync(envPath)) return;
-  for (const line of readFileSync(envPath, "utf8").split("\n")) {
-    const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
-    if (m && !process.env[m[1]]) process.env[m[1]] = m[2].trim();
-  }
+  try {
+    for (const line of readFileSync(envPath, "utf8").split("\n")) {
+      const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+      if (m && !process.env[m[1]]) process.env[m[1]] = m[2].trim();
+    }
+  } catch { /* non-fatal */ }
 }
 loadDotEnv();
 
 // ─── config ──────────────────────────────────────────────────────────────────
 
-const PORT              = parseInt(process.argv[process.argv.indexOf("--port") + 1] || process.env.CHANNEL_PORT || "3000");
-const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN ?? "";
-const TWILIO_ACCOUNT_SID= process.env.TWILIO_ACCOUNT_SID ?? "";
-const TWILIO_FROM       = process.env.TWILIO_WHATSAPP_FROM ?? process.env.TWILIO_FROM ?? "";
-const TELEGRAM_TOKEN    = process.env.TELEGRAM_BOT_TOKEN ?? "";
-const MAX_HISTORY       = 20; // messages per user
+function argFlag(name) {
+  const i = process.argv.indexOf(name);
+  return i !== -1 && i + 1 < process.argv.length ? process.argv[i + 1] : null;
+}
+
+// Comma/space separated env list → trimmed array
+function envList(name) {
+  return (process.env[name] ?? "")
+    .split(/[,\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+const PORT               = parseInt(argFlag("--port") || process.env.CHANNEL_PORT || "3000", 10);
+const TWILIO_AUTH_TOKEN  = process.env.TWILIO_AUTH_TOKEN ?? "";
+const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID ?? "";
+const TWILIO_FROM        = process.env.TWILIO_WHATSAPP_FROM ?? process.env.TWILIO_FROM ?? "";
+const TELEGRAM_TOKEN     = process.env.TELEGRAM_BOT_TOKEN ?? "";
+const TELEGRAM_SECRET    = process.env.TELEGRAM_WEBHOOK_SECRET ?? "";
+const MAX_HISTORY        = 20; // messages retained per user
+
+// Optional sender allowlists. When empty, all senders are allowed (and we warn).
+const WHATSAPP_ALLOWED = envList("WHATSAPP_ALLOWED_NUMBERS");  // e.g. whatsapp:+15551234567
+const TELEGRAM_ALLOWED = envList("TELEGRAM_ALLOWED_CHAT_IDS"); // e.g. 12345678
+
+function isAllowed(allowlist, sender) {
+  return allowlist.length === 0 || allowlist.includes(String(sender));
+}
 
 // System prompt: use the Claudbot persona from CLAUDE.md
 function loadSystemPrompt() {
@@ -145,13 +167,22 @@ async function sendWhatsApp(to, body) {
 
 // ─── Telegram helper: send message ───────────────────────────────────────────
 
-async function sendTelegram(chatId, text) {
+async function sendTelegram(chatId, text, { markdown = true } = {}) {
   if (!TELEGRAM_TOKEN) throw new Error("TELEGRAM_BOT_TOKEN not set");
+  const body = { chat_id: chatId, text };
+  if (markdown) body.parse_mode = "Markdown";
+
   const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, text, parse_mode: "Markdown" }),
+    body: JSON.stringify(body),
   });
+
+  // LLM output frequently contains unbalanced Markdown that Telegram rejects
+  // with a 400 — retry once as plain text so the user still gets the reply.
+  if (res.status === 400 && markdown) {
+    return sendTelegram(chatId, text, { markdown: false });
+  }
   if (!res.ok) throw new Error(`Telegram HTTP ${res.status}`);
 }
 
@@ -174,6 +205,9 @@ async function processMessage(userId, userText) {
 // ─── Express app ─────────────────────────────────────────────────────────────
 
 const app = express();
+// Honor X-Forwarded-Proto/Host so req.protocol is "https" behind ngrok or a
+// reverse proxy — required for Twilio signature validation to match.
+app.set("trust proxy", true);
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
@@ -192,6 +226,12 @@ app.post("/webhook/whatsapp", validateTwilioSignature, async (req, res) => {
   const msgBody = String(req.body.Body ?? "").trim();
 
   if (!from || !msgBody) return res.sendStatus(200);
+
+  // Reject senders not on the allowlist (prevents an open relay to paid APIs)
+  if (!isAllowed(WHATSAPP_ALLOWED, from)) {
+    console.warn(`[whatsapp] ✗ blocked sender not on allowlist: ${from}`);
+    return res.type("text/xml").send("<Response></Response>");
+  }
 
   logMessage("whatsapp", from, "in", msgBody);
   console.log(`[whatsapp] ← ${from}: ${msgBody.slice(0, 80)}`);
@@ -219,6 +259,16 @@ app.post("/webhook/whatsapp", validateTwilioSignature, async (req, res) => {
 // ── Telegram ────────────────────────────────────────────────────────────────
 
 app.post("/webhook/telegram", async (req, res) => {
+  // Verify Telegram's secret token if one is configured (set via setWebhook)
+  if (TELEGRAM_SECRET) {
+    const got = req.headers["x-telegram-bot-api-secret-token"] ?? "";
+    const a = Buffer.from(String(got));
+    const b = Buffer.from(TELEGRAM_SECRET);
+    if (a.length !== b.length || !timingSafeEqual(a, b)) {
+      return res.sendStatus(403);
+    }
+  }
+
   res.sendStatus(200); // ack immediately
 
   const message = req.body?.message;
@@ -227,6 +277,12 @@ app.post("/webhook/telegram", async (req, res) => {
   const chatId  = String(message.chat.id);
   const from    = message.from?.username ?? chatId;
   const msgText = message.text.trim();
+
+  // Reject chats not on the allowlist (prevents an open relay to paid APIs)
+  if (!isAllowed(TELEGRAM_ALLOWED, chatId)) {
+    console.warn(`[telegram] ✗ blocked chat not on allowlist: ${chatId}`);
+    return;
+  }
 
   logMessage("telegram", from, "in", msgText);
   console.log(`[telegram] ← ${from}: ${msgText.slice(0, 80)}`);
@@ -271,13 +327,15 @@ function chunkText(text, maxLen) {
 function printStartup() {
   const hasWhatsApp = Boolean(TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN);
   const hasTelegram = Boolean(TELEGRAM_TOKEN);
+  const waGuard = WHATSAPP_ALLOWED.length ? `allowlist: ${WHATSAPP_ALLOWED.length}` : "open (no allowlist)";
+  const tgGuard = TELEGRAM_ALLOWED.length ? `allowlist: ${TELEGRAM_ALLOWED.length}` : "open (no allowlist)";
 
   console.log(`
 [claudbot channels] Server running on port ${PORT}
 
   Channels active:
-    WhatsApp  ${hasWhatsApp ? "✓" : "✗  (set TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN + TWILIO_WHATSAPP_FROM)"}
-    Telegram  ${hasTelegram ? "✓" : "✗  (set TELEGRAM_BOT_TOKEN)"}
+    WhatsApp  ${hasWhatsApp ? `✓  (${waGuard})` : "✗  (set TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN + TWILIO_WHATSAPP_FROM)"}
+    Telegram  ${hasTelegram ? `✓  (${tgGuard})` : "✗  (set TELEGRAM_BOT_TOKEN)"}
 
   Webhook URLs (register these in your provider dashboard):
     WhatsApp  → POST http://YOUR-DOMAIN:${PORT}/webhook/whatsapp
@@ -289,6 +347,12 @@ function printStartup() {
 
   if (!NIM_KEY) {
     console.warn("  ⚠  NIM_API_KEY not set — responses will fail.\n     Source your .env file or set the key.\n");
+  }
+  if (hasWhatsApp && !WHATSAPP_ALLOWED.length) {
+    console.warn("  ⚠  WhatsApp has no sender allowlist — anyone messaging your number gets replies (burns API credits).\n     Set WHATSAPP_ALLOWED_NUMBERS in .env to restrict it.\n");
+  }
+  if (hasTelegram && !TELEGRAM_ALLOWED.length) {
+    console.warn("  ⚠  Telegram has no chat allowlist — anyone who finds your bot gets replies (burns API credits).\n     Set TELEGRAM_ALLOWED_CHAT_IDS in .env to restrict it.\n");
   }
 }
 
