@@ -13,11 +13,13 @@ git clone https://github.com/asuarcia/ClaudBot && cd ClaudBot && npm run setup &
 claudbot onboard
 ```
 
-That's it. `onboard` walks you through everything — Claude auth, fallback provider, sub-agents, WhatsApp/Telegram channels, safety restrictions, and permission mode. When it's done, just run:
+That's it. `onboard` walks you through everything — Claude auth, fallback provider, sub-agents, WhatsApp/Telegram channels, safety restrictions, and permission mode — and writes your keys to a gitignored `.env`. When it's done, just run:
 
 ```bash
 claudbot
 ```
+
+> Prefer to configure by hand? Copy [`.env.example`](.env.example) to `.env` and fill in the values. The real `.env` is gitignored — never commit it.
 
 ---
 
