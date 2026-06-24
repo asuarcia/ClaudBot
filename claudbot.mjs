@@ -98,17 +98,39 @@ function runScript(scriptFile, extraArgs = []) {
 
 // ─── banner ──────────────────────────────────────────────────────────────────
 
+const C = {
+  reset:  "\x1b[0m",
+  bold:   "\x1b[1m",
+  dim:    "\x1b[2m",
+  cyan:   "\x1b[36m",
+  yellow: "\x1b[33m",
+  green:  "\x1b[32m",
+  blue:   "\x1b[34m",
+  magenta:"\x1b[35m",
+  white:  "\x1b[97m",
+  bgCyan: "\x1b[46m",
+  bgYellow:"\x1b[43m",
+};
+
 function printBanner(mode) {
-  console.log(`
+  const cc = `${C.cyan}${C.bold}`;
+  console.log(`${cc}
   ██████╗██╗      █████╗ ██╗   ██╗██████╗ ██████╗  ██████╗ ████████╗
  ██╔════╝██║     ██╔══██╗██║   ██║██╔══██╗██╔══██╗██╔═══██╗╚══██╔══╝
  ██║     ██║     ███████║██║   ██║██║  ██║██████╔╝██║   ██║   ██║
  ██║     ██║     ██╔══██║██║   ██║██║  ██║██╔══██╗██║   ██║   ██║
  ╚██████╗███████╗██║  ██║╚██████╔╝██████╔╝██████╔╝╚██████╔╝   ██║
-  ╚═════╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚═════╝  ╚═════╝   ╚═╝
+  ╚═════╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚═════╝  ╚═════╝   ╚═╝${C.reset}
 `);
-  console.log(`  Mode: ${MODE_LABELS[mode]}  |  Backend: Claude Code  |  Fallback: NIM`);
-  console.log(`  Sub-agents: claudbot-exec MCP  |  Memory: Obsidian\n`);
+
+  const modeColor = mode === "full" ? C.yellow : mode === "readonly" ? C.dim : C.green;
+  console.log(
+    `  ${C.bold}${C.white}●${C.reset} ${C.bold}${C.cyan}CLAUDE CODE${C.reset}  ${C.dim}│${C.reset}  ` +
+    `mode ${modeColor}${C.bold}${mode}${C.reset}  ${C.dim}│${C.reset}  ` +
+    `fallback ${C.dim}NIM${C.reset}  ${C.dim}│${C.reset}  ` +
+    `agents ${C.dim}claudbot-exec${C.reset}`
+  );
+  console.log(`  ${C.dim}${"─".repeat(60)}${C.reset}\n`);
 }
 
 // ─── commands ────────────────────────────────────────────────────────────────
@@ -264,31 +286,83 @@ async function cmdUpdate() {
 
 // ─── NIM fallback REPL ───────────────────────────────────────────────────────
 
+const SPINNER_FRAMES = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
+const THINKING_LABELS = [
+  "thinking", "reasoning", "processing", "analyzing",
+  "computing", "considering", "working on it", "generating",
+];
+
+function nimBanner() {
+  console.log(`
+  ${C.yellow}${C.bold}⚡ NIM FALLBACK${C.reset}  ${C.dim}│${C.reset}  ${C.dim}Claude Code rate limit hit — switched to NIM${C.reset}
+  ${C.dim}${"─".repeat(60)}${C.reset}
+`);
+}
+
+function startSpinner(model) {
+  let frame = 0;
+  let label = 0;
+  const timer = setInterval(() => {
+    const spin  = `${C.yellow}${SPINNER_FRAMES[frame % SPINNER_FRAMES.length]}${C.reset}`;
+    const words = `${C.dim}${THINKING_LABELS[label % THINKING_LABELS.length]}…${C.reset}`;
+    const tag   = `${C.dim}[${model}]${C.reset}`;
+    process.stdout.write(`\r  ${spin}  ${words}  ${tag}   `);
+    frame++;
+    if (frame % SPINNER_FRAMES.length === 0) label++;
+  }, 100);
+  return () => {
+    clearInterval(timer);
+    process.stdout.write("\r\x1b[K"); // clear spinner line
+  };
+}
+
 async function nimRepl() {
   const { NimProvider } = await import("./providers/nim.mjs");
   const nim = new NimProvider();
+  const model = process.env.NIM_MODEL ?? "nim";
 
-  console.log("\n[claudbot] NIM fallback active. Claude Code hit its rate limit.");
-  console.log("           Type prompts below, or Ctrl+C to exit.\n");
+  nimBanner();
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
-  rl.on("SIGINT", () => { console.log("\n[claudbot] Bye."); process.exit(0); });
+  rl.on("SIGINT", () => {
+    console.log(`\n\n  ${C.dim}Bye.${C.reset}\n`);
+    process.exit(0);
+  });
 
   const prompt = () => {
-    rl.question(" claudbot (nim)> ", async (input) => {
+    rl.question(`  ${C.yellow}${C.bold}⚡ claudbot${C.reset} ${C.dim}(nim)${C.reset} ${C.bold}›${C.reset} `, async (input) => {
       const trimmed = input.trim();
       if (!trimmed) { prompt(); return; }
-      process.stdout.write("\n");
+
+      console.log();
+      const stopSpinner = startSpinner(model);
+      let firstChunk = true;
+
       try {
         for await (const event of nim.query(trimmed)) {
-          if (event.type === "assistant_text") process.stdout.write(event.text);
-          if (event.type === "text")           process.stdout.write(event.text);
+          const text = event.type === "assistant_text" || event.type === "text" ? event.text : null;
+          if (!text) continue;
+          if (firstChunk) {
+            stopSpinner();
+            process.stdout.write(`  ${C.dim}${"─".repeat(58)}${C.reset}\n  `);
+            firstChunk = false;
+          }
+          // Indent wrapped lines
+          process.stdout.write(text.replace(/\n/g, "\n  "));
         }
-      } catch (err) { console.error(`\n[nim] Error: ${err.message}`); }
-      process.stdout.write("\n");
+        if (!firstChunk) {
+          process.stdout.write(`\n  ${C.dim}${"─".repeat(58)}${C.reset}\n`);
+        }
+      } catch (err) {
+        stopSpinner();
+        console.error(`\n  ${C.yellow}⚠${C.reset}  ${err.message}`);
+      }
+
+      console.log();
       prompt();
     });
   };
+
   prompt();
 }
 
