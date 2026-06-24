@@ -227,38 +227,121 @@ async function stepFallbackProvider() {
 // ─── step 4: obsidian ────────────────────────────────────────────────────────
 
 async function stepObsidian() {
-  p.log.step("Obsidian memory vault (optional)");
+  p.log.step("Obsidian memory vault");
 
-  const use = checkCancel(await p.confirm({
-    message: "Connect an Obsidian vault for long-term memory?",
-    initialValue: true,
+  p.note(
+    "Claudbot uses an Obsidian vault as long-term memory.\n" +
+    "It reads and writes notes across sessions so it never forgets\n" +
+    "your preferences, projects, and past work.",
+    "Memory"
+  );
+
+  const hasVault = checkCancel(await p.select({
+    message: "Do you have an Obsidian vault already?",
+    options: [
+      { value: "yes",    label: "Yes — I have one",              hint: "I'll point Claudbot at it" },
+      { value: "create", label: "No — create one for me",        hint: "Claudbot will set it up after onboarding" },
+      { value: "skip",   label: "No — skip memory for now",      hint: "You can add it later" },
+    ],
   }));
 
   const settings = readYaml(SETTINGS_FILE, {});
   settings.mcpServers = settings.mcpServers ?? {};
 
-  if (!use) {
+  if (hasVault === "skip") {
     delete settings.mcpServers["obsidian-brain"];
     mkdirSync(path.dirname(SETTINGS_FILE), { recursive: true });
     writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
-    p.log.info("Skipping Obsidian.");
-    return;
+    p.log.info("Skipping memory vault. Add it later by running: claudbot onboard");
+    return { vaultPath: null, newBrain: false };
   }
 
-  const defaultVault = process.platform === "win32" ? "C:\\Repo\\MyBrain" : `${process.env.HOME}/MyBrain`;
-  const vaultPath = checkCancel(await p.text({
-    message: "Path to your Obsidian vault:",
-    initialValue: defaultVault,
+  // ── user has an existing vault ──────────────────────────────────────────────
+  if (hasVault === "yes") {
+    const defaultVault = process.platform === "win32"
+      ? "C:\\Repo\\MyBrain"
+      : `${process.env.HOME}/MyBrain`;
+
+    const vaultPath = checkCancel(await p.text({
+      message: "Path to your Obsidian vault:",
+      initialValue: defaultVault,
+      validate: (v) => {
+        if (!v.trim()) return "Required";
+        if (!existsSync(v.trim())) return `Folder not found: ${v.trim()}`;
+      },
+    }));
+
+    settings.mcpServers["obsidian-brain"] = {
+      command: "npx",
+      args: ["-y", "mcp-obsidian", vaultPath.trim()],
+    };
+    mkdirSync(path.dirname(SETTINGS_FILE), { recursive: true });
+    writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
+    p.log.success(`Connected vault: ${vaultPath.trim()}`);
+    return { vaultPath: vaultPath.trim(), newBrain: false };
+  }
+
+  // ── create a new brain ─────────────────────────────────────────────────────
+  p.note(
+    "Claudbot will create a new Obsidian vault and set it up for you.\n\n" +
+    "If Obsidian isn't installed yet:\n" +
+    "  Download: https://obsidian.md/download\n\n" +
+    "After onboarding, launch Claudbot and it will walk you through\n" +
+    "opening the vault in Obsidian and configuring it.",
+    "Creating a new brain"
+  );
+
+  const defaultNew = process.platform === "win32"
+    ? "C:\\Repo\\MyBrain"
+    : `${process.env.HOME}/MyBrain`;
+
+  const newPath = checkCancel(await p.text({
+    message: "Where should the vault be created?",
+    initialValue: defaultNew,
     validate: (v) => (v.trim().length === 0 ? "Required" : undefined),
   }));
 
+  const vaultPath = newPath.trim();
+
+  // Create the folder structure (PARA method)
+  const folders = [
+    vaultPath,
+    path.join(vaultPath, "Projects"),
+    path.join(vaultPath, "Areas"),
+    path.join(vaultPath, "Resources"),
+    path.join(vaultPath, "Resources", "Patterns"),
+    path.join(vaultPath, "Resources", "Clippings"),
+    path.join(vaultPath, "Archives"),
+    path.join(vaultPath, "Claudbot"),
+  ];
+  for (const folder of folders) mkdirSync(folder, { recursive: true });
+
+  // Write a welcome note Claudbot will read on first run
+  writeFileSync(
+    path.join(vaultPath, "Welcome.md"),
+    `# Welcome to your Claudbot Brain\n\n` +
+    `This vault was created by Claudbot onboarding on ${new Date().toLocaleDateString()}.\n\n` +
+    `## Structure (PARA method)\n\n` +
+    `- **Projects/** — active work with a clear finish line\n` +
+    `- **Areas/** — ongoing responsibilities (coding standards, preferences)\n` +
+    `- **Resources/** — reference material and reusable patterns\n` +
+    `- **Archives/** — completed or inactive items\n` +
+    `- **Claudbot/** — notes written by Claudbot across sessions\n\n` +
+    `## Next steps\n\n` +
+    `1. Open Obsidian and add this folder as a vault\n` +
+    `2. Run \`claudbot\` and ask it to finish setting up your brain\n`
+  );
+
+  // Wire up the MCP server
   settings.mcpServers["obsidian-brain"] = {
     command: "npx",
-    args: ["-y", "mcp-obsidian", vaultPath.trim()],
+    args: ["-y", "mcp-obsidian", vaultPath],
   };
   mkdirSync(path.dirname(SETTINGS_FILE), { recursive: true });
   writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
-  p.log.success(`Obsidian vault: ${vaultPath.trim()}`);
+
+  p.log.success(`Brain created at: ${vaultPath}`);
+  return { vaultPath, newBrain: true };
 }
 
 // ─── step 5: sub-agents ──────────────────────────────────────────────────────
@@ -633,7 +716,7 @@ async function main() {
   await stepWelcome();
   await stepClaudeAuth();
   await stepFallbackProvider();
-  await stepObsidian();
+  const { vaultPath, newBrain } = await stepObsidian();
   await stepSubAgents();
   await stepChannels();
   await stepRestrictions();
@@ -641,17 +724,40 @@ async function main() {
   await stepFinalizeSettings();
   await stepHealthCheck();
 
-  p.outro(
-    chalk.bold.green("Claudbot is ready!") + "\n\n" +
-    "  Load keys:         " + chalk.cyan(
-      process.platform === "win32"
-        ? "Get-Content .env | ForEach-Object { if ($_ -match '^([^#=][^=]*)=(.+)$') { [System.Environment]::SetEnvironmentVariable($matches[1],$matches[2],'Process') } }"
-        : "source .env"
-    ) + "\n" +
-    "  Start:             " + chalk.cyan(`node claudbot.mjs`) + "\n" +
-    "  With mode:         " + chalk.cyan(`node claudbot.mjs --mode ${defaultMode}`) + "\n\n" +
-    chalk.dim("Edit .claudbot/agents.yaml to add/change sub-agents anytime.")
-  );
+  if (newBrain) {
+    // New brain path — special outro + offer to launch now
+    p.outro(
+      chalk.bold.green("Claudbot is ready — and your brain is waiting!") + "\n\n" +
+      chalk.yellow("  Your new Obsidian vault was created at:") + "\n" +
+      `  ${chalk.cyan(vaultPath)}\n\n` +
+      chalk.bold("  Next steps:\n") +
+      `  1. Open Obsidian → Add folder as vault → pick ${chalk.cyan(vaultPath)}\n` +
+      `  2. Run ${chalk.cyan("claudbot")} and ask it to finish setting up your brain\n\n` +
+      chalk.dim("  Claudbot will create your coding standards, project structure,\n") +
+      chalk.dim("  and personal preferences automatically.\n")
+    );
+
+    // Offer to launch right now
+    const launchNow = checkCancel(await p.confirm({
+      message: "Launch Claudbot now so it can set up your brain?",
+      initialValue: true,
+    }));
+
+    if (launchNow) {
+      console.log(chalk.dim("\n  Launching Claudbot. Tell it: \"set up my Obsidian brain\"\n"));
+      const claudbotBin = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "claudbot.mjs");
+      spawnSync("node", [claudbotBin], { stdio: "inherit", env: process.env });
+    }
+  } else {
+    p.outro(
+      chalk.bold.green("Claudbot is ready!") + "\n\n" +
+      "  Start:    " + chalk.cyan("claudbot") + "\n" +
+      "  Mode:     " + chalk.cyan(`claudbot start --mode ${defaultMode}`) + "\n" +
+      "  Update:   " + chalk.cyan("claudbot update") + "\n" +
+      "  Doctor:   " + chalk.cyan("claudbot doctor") + "\n\n" +
+      chalk.dim("Edit .claudbot/agents.yaml to add/change sub-agents anytime.")
+    );
+  }
 }
 
 main().catch((err) => {
