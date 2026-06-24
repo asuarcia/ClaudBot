@@ -1,156 +1,99 @@
 # Claudbot
 
-An autonomous agent program built on top of Claude Code. Launch it like any app, talk to it in a terminal, and it works autonomously — reading files, running commands, browsing the web, writing code, and delegating specialized tasks to sub-agents.
+An autonomous agent program built on top of Claude Code. It runs like an app, works autonomously — reading files, executing commands, browsing the web, writing code — and delegates specialized tasks to sub-agents on any provider. When you hit your Claude rate limit it automatically falls back to NIM so you keep working.
 
-**Cost philosophy**: no per-token API billing on the main agent. The primary engine runs on a Claude subscription. A NIM endpoint serves as automatic fallback if a rate limit is hit. Sub-agents also run on NIM (or any OpenAI-compatible endpoint you choose).
+**Cost philosophy:** no per-token billing on the main agent. Claude Code (subscription) is the brain. NIM or any OpenAI-compatible endpoint powers the fallback and all sub-agents.
+
+---
+
+## Install
+
+```bash
+git clone https://github.com/asuarcia/ClaudBot && cd ClaudBot && npm run setup && npm install -g .
+claudbot onboard
+```
+
+That's it. `onboard` walks you through everything — Claude auth, fallback provider, sub-agents, WhatsApp/Telegram channels, safety restrictions, and permission mode. When it's done, just run:
+
+```bash
+claudbot
+```
+
+---
+
+## Commands
+
+All commands go through `claudbot`:
+
+| Command | What it does |
+|---------|-------------|
+| `claudbot` | Start the agent (default mode) |
+| `claudbot start --mode auto` | Start with a specific permission mode |
+| `claudbot channels` | Start the WhatsApp / Telegram webhook server |
+| `claudbot dream` | Run background tasks once (memory, research, reflection) |
+| `claudbot dream --watch` | Run background tasks on a continuous schedule |
+| `claudbot onboard` | Re-run the setup wizard |
+| `claudbot update` | Pull latest code from GitHub + reinstall deps |
+| `claudbot doctor` | Health check — Claude auth, API keys, sub-agents, channels |
+| `claudbot help` | Show all commands |
 
 ---
 
 ## Architecture
 
 ```
-You (terminal)
-     │
-     ▼
- Claudbot REPL              ← Node.js program (this repo)
-     │
-     ├─ Primary:   Claude Code CLI    (subscription-based, no per-token cost)
-     └─ Fallback:  NVIDIA NIM         (HTTP, kicks in on rate limit)
-              │
-              ├─ MCP: claudbot-exec   ← sub-agent dispatcher
-              │        reads agents.yaml, calls any OpenAI-compatible endpoint
-              └─ MCP: obsidian-brain  ← long-term memory (Obsidian vault)
-```
-
-Claudbot automatically switches to NIM when Claude Code hits a rate limit — no manual intervention needed.
-
----
-
-## Prerequisites
-
-- [Claude Code](https://claude.ai/code) installed and authenticated (`claude auth login`)
-- Node.js 22+
-- Git
-- An [NVIDIA NIM](https://www.nvidia.com/en-us/ai/) API key (for fallback + sub-agents)
-
-Optional:
-- Docker + Docker Compose — for the sandboxed mode
-- [Ollama](https://ollama.com) — to run local sub-agents
-
----
-
-## Installation
-
-```bash
-git clone https://github.com/asuarcia/ClaudBot
-cd ClaudBot
-npm run setup      # install dependencies
-npm run onboard    # interactive setup wizard
-```
-
-The onboarding wizard walks you through:
-1. **Risk acknowledgment** — understand what autonomous mode means
-2. **Claude Code auth** — log in to your Claude subscription
-3. **NIM API key** — for fallback + sub-agent inference
-4. **Obsidian vault** — optional long-term memory
-5. **Sub-agents** — create as many as you want (name, endpoint, model, description)
-6. **Channels** — connect Discord, Telegram, Slack, or WhatsApp
-7. **Restrictions** — hard-block specific commands or file paths
-8. **Permission mode** — choose your default autonomy level
-9. **Health check** — verify everything is working
-
-After onboarding, start Claudbot:
-
-```bash
-source .env          # load API keys written by onboarding
-node claudbot.mjs
-```
-
-Or install globally:
-
-```bash
-npm install -g .
-source .env
 claudbot
+    │
+    ├── Primary:  Claude Code (subscription, no per-token cost)
+    │       │
+    │       ├── claudbot-exec MCP  →  sub-agents (any OpenAI-compatible endpoint)
+    │       └── obsidian-brain MCP →  long-term memory (Obsidian vault)
+    │
+    └── Fallback: NIM (kicks in automatically when Claude hits rate limit)
 ```
 
-You'll see the REPL prompt:
-
-```
- claudbot (claude-code)>
-```
-
-Type any prompt and press Enter. Claude Code handles it autonomously. If it hits a rate limit, Claudbot switches to NIM automatically.
+Claude Code is the backend. It has full tool access built in — file system, bash, web search, git — with no extra setup. Claudbot wraps it with a persona, safety restrictions, multi-provider sub-agents, messaging channels, and dreaming.
 
 ---
 
 ## Permission modes
 
-Control what Claude is allowed to do without needing Docker:
+Controls what Claude can do without asking first:
 
-| Mode | Flag | What Claude can do |
-|------|------|--------------------|
-| `full` | *(default)* | Everything — no prompts, no restrictions |
-| `auto` | `--mode auto` | Runs safe ops automatically, asks before risky ones |
-| `safe` | `--mode safe` | Edits files freely, asks before every bash command |
-| `readonly` | `--mode readonly` | Read and plan only — no file edits, no bash |
-
-```bash
-claudbot                  # full autonomous (default)
-claudbot --mode auto      # asks before risky shell ops
-claudbot --mode safe      # asks before any bash command
-claudbot --mode readonly  # pure read-only analysis
-```
+| Mode | Command | Behavior |
+|------|---------|----------|
+| `full` | `claudbot` | Everything, no prompts — restrictions still apply |
+| `auto` | `claudbot start --mode auto` | Runs safe ops automatically, asks before risky ones |
+| `safe` | `claudbot start --mode safe` | Edits files freely, asks before every bash command |
+| `readonly` | `claudbot start --mode readonly` | No file edits or bash at all |
 
 The active mode is shown in the startup banner.
 
 ---
 
-## Sandboxed mode (Docker)
+## Safety restrictions
 
-Docker gives Claude an isolated Linux container — it can't touch your host filesystem outside the `workspace/` folder.
+Claudbot ships with 40+ deny rules pre-enabled — destructive deletes, disk/boot commands, registry edits, remote code execution, force pushes, and writes to system paths and credentials. They're enforced even in full-autonomous mode.
 
-### 1. Build the image
-
-```bash
-docker compose build
-```
-
-### 2. Authenticate (first time only)
-
-```bash
-docker compose run claudbot claude auth login
-```
-
-Follow the browser prompt. Credentials persist in a named Docker volume.
-
-### 3. Run
-
-```bash
-docker compose up
-```
-
-### Working with files
-
-Drop files into `workspace/` on your host — that folder is mounted into the container at `/workspace`. Claude can read, edit, and create files there.
-
-### Resource limits
-
-Defaults: **2 CPU cores / 2 GB RAM**. Edit `docker-compose.yml` to change:
+Manage them in `.claudbot/restrictions.yaml`. All rules are on by default. Remove a line to lift that restriction. The file reloads on every start — no restart needed.
 
 ```yaml
-deploy:
-  resources:
-    limits:
-      cpus: "4"
-      memory: 4G
+deny:
+  - "Bash(rm -rf *)"
+  - "Bash(format *)"
+  - "Bash(curl * | bash)"
+  - "Bash(git push --force *)"
+  - "Write(C:/Users/*/.ssh/*)"
+  # ... 35+ more
 ```
+
+During onboarding you can deselect any rules you want to remove.
 
 ---
 
-## Sub-agents — `.claudbot/agents.yaml`
+## Sub-agents
 
-Add any model at any OpenAI-compatible endpoint as a sub-agent. Claude reads this file and routes tasks to sub-agents automatically — no code changes needed.
+Add any model at any OpenAI-compatible endpoint as a sub-agent. Claude reads `agents.yaml` and delegates tasks automatically — you can also just ask it directly ("use the researcher agent for this").
 
 ```yaml
 agents:
@@ -160,56 +103,97 @@ agents:
     apiKeyEnv: NIM_API_KEY
     jobDescription: >
       Research topics, summarize documents, answer factual questions.
-      Best for: web research, summarization, literature review.
 
-  - name: nemotron
-    model: nvidia/llama-3.3-nemotron-super-49b-v1
+  - name: coder
+    model: deepseek-ai/deepseek-r1
     endpoint: https://integrate.api.nvidia.com/v1
     apiKeyEnv: NIM_API_KEY
     jobDescription: >
-      Deep reasoning and complex multi-step problem solving.
-      Best for: hard analytical tasks, evaluation, long-context reasoning.
+      Code generation, debugging, and refactoring.
 
-  - name: my-agent
-    model: any-model-id
-    endpoint: https://any-openai-compatible-endpoint/v1
-    apiKeyEnv: MY_API_KEY_ENV_VAR
+  - name: local
+    model: llama3.2
+    endpoint: http://localhost:11434/v1
+    apiKeyEnv: null
     jobDescription: >
-      Describe what this agent does so Claude knows when to delegate to it.
+      Fast local model for lightweight tasks. No API key needed.
 ```
 
-**Fields:**
+Supported providers out of the box (configured during onboarding): NVIDIA NIM, OpenAI, Anthropic, Google Gemini, Mistral, Groq, Together AI, OpenRouter, xAI, Cohere, DeepInfra, Fireworks, Ollama, LM Studio, vLLM, Custom.
 
-| Field | Description |
-|-------|-------------|
-| `name` | Short identifier. Claude calls agents by this name. |
-| `model` | Model ID as the endpoint expects it. |
-| `endpoint` | Base URL of any OpenAI-compatible API (`/chat/completions` is appended automatically). |
-| `apiKeyEnv` | Name of the env var holding the API key. Use `null` for local endpoints (Ollama, LM Studio). |
-| `jobDescription` | Plain English description. Claude reads this to decide when to delegate. |
+Edit `agents.yaml` anytime — changes take effect in the current session without restarting.
 
 ---
 
-## NIM configuration
+## WhatsApp & Telegram
 
-Set these before running (or add to a `.env` file you source):
+Start the channel server in a separate terminal:
 
 ```bash
-# Required for fallback + NIM-based sub-agents
-export NIM_API_KEY=nvapi-xxxxxxxxxxxx
-
-# Optional — these are the defaults
-export NIM_BASE_URL=https://integrate.api.nvidia.com/v1
-export NIM_MODEL=meta/llama-3.1-70b-instruct
+claudbot channels
 ```
+
+Add these to your `.env` for WhatsApp (via Twilio):
+
+```
+TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxx
+TWILIO_AUTH_TOKEN=xxxxxxxxxxxx
+TWILIO_WHATSAPP_FROM=whatsapp:+14155238886
+```
+
+And for Telegram:
+
+```
+TELEGRAM_BOT_TOKEN=xxxxxxxxxxxx
+```
+
+Register the webhook URLs in your provider dashboard:
+
+```
+WhatsApp  →  https://your-domain/webhook/whatsapp
+Telegram  →  https://your-domain/webhook/telegram
+```
+
+For local testing, expose port 3000 with ngrok:
+
+```bash
+npx ngrok http 3000
+```
+
+**Getting a WhatsApp number:**
+- **Sandbox (free, instant):** Go to [twilio.com/console/messaging/whatsapp/sandbox](https://www.twilio.com/console/messaging/whatsapp/sandbox) — no approval needed, works immediately for testing
+- **Production number:** Buy a Twilio number (~$1/month) and apply for WhatsApp Business API access
+
+Channels use NIM for responses and maintain per-user conversation history. Twilio webhooks are signature-validated so only real Twilio requests are accepted.
+
+---
+
+## Dreaming
+
+Background autonomous mode — Claudbot thinks and learns when you're not actively using it.
+
+```bash
+claudbot dream            # run all tasks once
+claudbot dream --watch    # run on a continuous schedule
+claudbot dream --task memory  # run one specific task
+```
+
+Default tasks (all configurable in `.claudbot/dream-tasks.yaml`):
+
+| Task | What it does | Default interval |
+|------|-------------|-----------------|
+| `memory` | Consolidates recent work into Obsidian notes | 1 hour |
+| `reflection` | Analyzes performance and generates improvement actions | 2 hours |
+| `research` | Proactively researches topics that came up recently | 3 hours |
+| `planning` | Thinks ahead about upcoming work | 4 hours |
+
+Outputs are logged to `.claudbot/dream-log.md`.
 
 ---
 
 ## Memory (Obsidian)
 
-Claudbot writes to an Obsidian vault for long-term memory. Default vault path: `C:\Repo\MyBrain`.
-
-To point it at a different vault, edit `.claudbot/.claude/settings.json`:
+Claudbot writes to an Obsidian vault for long-term memory across sessions. Configure the vault path during onboarding or edit `.claudbot/.claude/settings.json`:
 
 ```json
 {
@@ -222,56 +206,31 @@ To point it at a different vault, edit `.claudbot/.claude/settings.json`:
 }
 ```
 
-Remove the `obsidian-brain` block entirely if you don't use Obsidian.
+Remove the block entirely if you don't use Obsidian.
 
 ---
 
-## Restrictions — `.claudbot/restrictions.yaml`
+## Updating
 
-Hard-block specific commands or file paths. These are enforced even in full-autonomous mode — Claude literally cannot execute a denied pattern.
-
-```yaml
-deny:
-  # Dangerous shell commands
-  - Bash(rm -rf *)
-  - Bash(del /f /s /q *)
-  - Bash(format *)
-  - Bash(curl * | bash)
-
-  # Sensitive file paths
-  - Edit(C:/Users/*/Documents/*)
-  - Write(/etc/*)
-  - Edit(C:/Windows/*)
-
-  # Git guardrails
-  - Bash(git push --force *)
+```bash
+claudbot update
 ```
 
-Edit this file anytime — restrictions are reloaded on every query, no restart needed.
+Pulls the latest code from GitHub, shows what changed, and reinstalls dependencies — all in one command.
 
 ---
 
-## Channels — `.claudbot/channels.yaml`
+## Sandboxed mode (Docker)
 
-Configured during onboarding. Contains credentials for Discord, Telegram, Slack, and WhatsApp. **This file is gitignored** — never commit it.
+Run Claudbot in an isolated Linux container with no access to your host filesystem outside `workspace/`.
 
-To reconfigure a channel, re-run `npm run onboard` or edit the file directly:
-
-```yaml
-channels:
-  - type: discord
-    guildId: "123456789"
-    channelId: "987654321"
-    tokenEnv: DISCORD_BOT_TOKEN
-
-  - type: telegram
-    chatId: "123456789"
-    tokenEnv: TELEGRAM_BOT_TOKEN
-
-  - type: slack
-    channel: "#general"
-    tokenEnv: SLACK_BOT_TOKEN
+```bash
+docker compose build
+docker compose run claudbot claude auth login   # first time only
+docker compose up
 ```
+
+Drop files into `workspace/` — it's mounted into the container at `/workspace`. Resource limits default to 2 CPU / 2 GB RAM; edit `docker-compose.yml` to change them.
 
 ---
 
@@ -279,13 +238,13 @@ channels:
 
 | File | What it controls |
 |------|-----------------|
-| `.claudbot/agents.yaml` | Sub-agent registry — add/remove agents here |
-| `.claudbot/restrictions.yaml` | Deny rules — commands and paths Claude can never touch |
-| `.claudbot/channels.yaml` | Channel credentials (gitignored — never commit) |
-| `.claudbot/CLAUDE.md` | Claude's persona, behavior rules, session checklist |
-| `.claudbot/.claude/settings.json` | MCP server declarations and tool permissions |
-| `.env` | API keys written by onboarding (gitignored — never commit) |
-| `docker-compose.yml` | Container resource limits, volume mounts, env vars |
+| `.claudbot/CLAUDE.md` | Claudbot persona and behavior rules |
+| `.claudbot/agents.yaml` | Sub-agent registry |
+| `.claudbot/restrictions.yaml` | Deny rules — enforced in all modes |
+| `.claudbot/dream-tasks.yaml` | Dream task definitions and intervals |
+| `.claudbot/channels.yaml` | Channel credentials (gitignored) |
+| `.claudbot/.claude/settings.json` | MCP permissions and trusted servers |
+| `.env` | API keys (gitignored) |
 
 ---
 
@@ -293,43 +252,27 @@ channels:
 
 ```
 ClaudBot/
-├── claudbot.mjs              # Main REPL + provider orchestration
+├── claudbot.mjs              # CLI entry point — all commands go here
+├── channel-server.mjs        # WhatsApp / Telegram webhook server
+├── dream.mjs                 # Background autonomous tasks
 ├── providers/
 │   ├── base.mjs              # Base class + error types
-│   ├── claude.mjs            # Claude Code CLI provider (primary)
-│   └── nim.mjs               # NVIDIA NIM HTTP provider (fallback)
+│   ├── claude.mjs            # Claude Code provider
+│   └── nim.mjs               # NIM HTTP provider (fallback)
 ├── scripts/
-│   └── onboard.mjs           # Interactive setup wizard (npm run onboard)
+│   └── onboard.mjs           # Interactive setup wizard
 ├── mcp-servers/
-│   └── claudbot-exec/        # MCP server: sub-agent dispatcher
+│   └── claudbot-exec/        # MCP: sub-agent dispatcher
 │       └── index.mjs
 ├── .claudbot/                # Claude Code project directory
-│   ├── CLAUDE.md             # Claudbot persona + behavior rules
-│   ├── agents.yaml           # Sub-agent registry (edit freely)
-│   ├── restrictions.yaml     # Deny rules (generated by onboarding)
-│   ├── channels.yaml         # Channel credentials (gitignored)
-│   ├── skills/               # Skill files Claude uses automatically
+│   ├── CLAUDE.md             # Persona + behavior rules
+│   ├── agents.yaml           # Sub-agent registry
+│   ├── restrictions.yaml     # Deny rules (pre-populated)
+│   ├── dream-tasks.yaml      # Dream task config (auto-generated)
 │   └── .claude/
-│       └── settings.json     # MCP server declarations + permissions
-├── .env                      # API keys (gitignored, written by onboarding)
-├── workspace/                # Sandboxed file area (Docker mode)
+│       └── settings.json     # MCP trust + tool permissions
+├── .env                      # API keys (gitignored)
+├── workspace/                # Docker bind mount
 ├── Dockerfile
 └── docker-compose.yml
-```
-
----
-
-## Updating
-
-```bash
-git pull
-npm run setup    # re-run if MCP server deps changed
-```
-
-In Docker:
-
-```bash
-git pull
-docker compose build
-docker compose up
 ```
