@@ -30,6 +30,37 @@ export class NimProvider extends BaseProvider {
     return Boolean(this.#apiKey);
   }
 
+  /**
+   * Non-streaming chat that supports OpenAI-style tool calling. Returns the raw
+   * assistant message ({ content, tool_calls }). Used by the fallback REPL so it
+   * can delegate to sub-agents; gracefully usable without tools too.
+   */
+  async chat(messages, { tools } = {}) {
+    if (!this.#apiKey) {
+      throw new ProviderError("NIM_API_KEY not set.", { code: "NO_API_KEY" });
+    }
+    const body = { model: this.#model, messages, max_tokens: 4096 };
+    if (tools?.length) {
+      body.tools = tools;
+      body.tool_choice = "auto";
+    }
+    const response = await fetch(`${this.#baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.#apiKey}`,
+      },
+      body: JSON.stringify(body),
+    });
+    if (response.status === 429) throw new RateLimitError("NIM rate limit (HTTP 429)");
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new ProviderError(`NIM HTTP ${response.status}: ${text}`, { code: response.status });
+    }
+    const data = await response.json();
+    return data?.choices?.[0]?.message ?? { content: "" };
+  }
+
   async *query(prompt, { history = [] } = {}) {
     if (!this.#apiKey) {
       throw new ProviderError(

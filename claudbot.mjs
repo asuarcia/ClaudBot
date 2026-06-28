@@ -429,8 +429,39 @@ function loadPersona() {
   try { return readFileSync(personaPath, "utf8"); } catch { return null; }
 }
 
+// Tools the fallback exposes to the NIM model so it can delegate to sub-agents,
+// just like Claude Code does via the claudbot-exec MCP.
+const AGENT_TOOLS = [
+  {
+    type: "function",
+    function: {
+      name: "list_agents",
+      description: "List the registered sub-agents you can delegate to, with their specialties.",
+      parameters: { type: "object", properties: {}, required: [] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "run_agent",
+      description:
+        "Delegate a self-contained task to a named sub-agent and get its response. " +
+        "The sub-agent has no prior context — put everything it needs in `prompt`.",
+      parameters: {
+        type: "object",
+        properties: {
+          name:   { type: "string", description: "Agent name from the registry (e.g. 'researcher', 'nemotron')." },
+          prompt: { type: "string", description: "The full task or question for the agent." },
+        },
+        required: ["name", "prompt"],
+      },
+    },
+  },
+];
+
 async function nimRepl() {
   const { NimProvider } = await import("./providers/nim.mjs");
+  const agents = await import("./providers/agents.mjs");
   const nim = new NimProvider();
   const model = process.env.NIM_MODEL ?? "nim";
 
@@ -444,9 +475,79 @@ async function nimRepl() {
 
   nimBanner();
 
-  // Conversation history so the fallback feels continuous, not amnesiac
+  // Tell the fallback which sub-agents it can delegate to (parity with Claude Code).
+  const roster = agents.describeAgents();
+  const haveAgents = roster.length > 0;
+  if (haveAgents) {
+    console.log(`  ${C.dim}Sub-agents available — delegate with the run_agent tool or ${C.reset}${C.cyan}/agent <name> <task>${C.reset}${C.dim}:${C.reset}`);
+    console.log(`${roster.split("\n").map((l) => "  " + C.dim + l + C.reset).join("\n")}\n`);
+  }
+
+  // Conversation history so the fallback feels continuous, not amnesiac.
   const persona = loadPersona();
-  const history = persona ? [{ role: "system", content: persona }] : [];
+  const sys =
+    (persona ?? "") +
+    (haveAgents
+      ? `\n\n## Sub-agents (delegate when useful)\nYou can delegate work to these agents with the run_agent tool. Prefer delegating research/summarization and heavy reasoning rather than doing everything yourself:\n${roster}`
+      : "");
+  const history = sys.trim() ? [{ role: "system", content: sys }] : [];
+
+  async function executeToolCall(tc) {
+    const fn = tc.function?.name;
+    let args = {};
+    try { args = JSON.parse(tc.function?.arguments || "{}"); } catch { /* bad args */ }
+    if (fn === "list_agents") return roster || "(no agents registered)";
+    if (fn === "run_agent") {
+      console.log(`  ${C.magenta}↪ delegating to ${args.name}…${C.reset}`);
+      return await agents.runAgent(args.name, args.prompt);
+    }
+    return `Unknown tool: ${fn}`;
+  }
+
+  let toolsSupported = haveAgents; // disabled if the model rejects the tools param
+
+  // One user turn: let the model call sub-agents in a loop, then return its text.
+  async function runTurn(userText) {
+    const messages = [...history, { role: "user", content: userText }];
+    let text = "";
+    for (let i = 0; i < 6; i++) {
+      const stop = startSpinner(model);
+      let msg;
+      try {
+        msg = await nim.chat(messages, { tools: toolsSupported ? AGENT_TOOLS : undefined });
+      } catch (err) {
+        stop();
+        if (toolsSupported && err.code === 400) { // model can't do tools — retry plain
+          toolsSupported = false;
+          messages.length = 0;
+          messages.push(...history, { role: "user", content: userText });
+          continue;
+        }
+        throw err;
+      }
+      stop();
+
+      if (msg.tool_calls?.length) {
+        messages.push({ role: "assistant", content: msg.content ?? "", tool_calls: msg.tool_calls });
+        for (const tc of msg.tool_calls) {
+          let result;
+          try { result = await executeToolCall(tc); }
+          catch (e) { result = `Error: ${e.message}`; }
+          messages.push({ role: "tool", tool_call_id: tc.id, content: String(result).slice(0, 8000) });
+        }
+        continue; // feed results back to the model
+      }
+      text = msg.content ?? "";
+      break;
+    }
+    return text;
+  }
+
+  const printReply = (text) => {
+    process.stdout.write(`  ${C.dim}${"─".repeat(58)}${C.reset}\n  `);
+    process.stdout.write((text || "(no response)").replace(/\n/g, "\n  "));
+    process.stdout.write(`\n  ${C.dim}${"─".repeat(58)}${C.reset}\n`);
+  };
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
   rl.on("SIGINT", () => {
@@ -463,32 +564,38 @@ async function nimRepl() {
         process.exit(0);
       }
 
-      console.log();
-      const stopSpinner = startSpinner(model);
-      let firstChunk = true;
-      let reply = "";
+      // Manual delegation commands — a guaranteed path even if the model won't tool-call.
+      if (trimmed === "/agents") {
+        console.log(`\n${roster ? roster.split("\n").map((l) => "  " + l).join("\n") : "  (no agents registered)"}\n`);
+        prompt();
+        return;
+      }
+      const m = trimmed.match(/^\/agent\s+(\S+)\s+([\s\S]+)$/);
+      if (m) {
+        const [, name, task] = m;
+        console.log();
+        const stop = startSpinner(name);
+        try {
+          const out = await agents.runAgent(name, task);
+          stop();
+          printReply(`[${name}]\n\n${out}`);
+        } catch (err) {
+          stop();
+          console.error(`\n  ${C.yellow}⚠${C.reset}  ${err.message}`);
+        }
+        console.log();
+        prompt();
+        return;
+      }
 
+      console.log();
       try {
-        for await (const event of nim.query(trimmed, { history })) {
-          const text = event.type === "assistant_text" || event.type === "text" ? event.text : null;
-          if (!text) continue;
-          if (firstChunk) {
-            stopSpinner();
-            process.stdout.write(`  ${C.dim}${"─".repeat(58)}${C.reset}\n  `);
-            firstChunk = false;
-          }
-          reply += text;
-          process.stdout.write(text.replace(/\n/g, "\n  ")); // indent wrapped lines
-        }
-        if (!firstChunk) {
-          process.stdout.write(`\n  ${C.dim}${"─".repeat(58)}${C.reset}\n`);
-          // Keep the exchange in history (trim to avoid unbounded growth)
-          history.push({ role: "user", content: trimmed });
-          history.push({ role: "assistant", content: reply });
-          while (history.length > 21) history.splice(persona ? 1 : 0, 2);
-        }
+        const reply = await runTurn(trimmed);
+        printReply(reply);
+        history.push({ role: "user", content: trimmed });
+        history.push({ role: "assistant", content: reply });
+        while (history.length > 21) history.splice(history[0]?.role === "system" ? 1 : 0, 2);
       } catch (err) {
-        stopSpinner();
         console.error(`\n  ${C.yellow}⚠${C.reset}  ${err.message}`);
       }
 
