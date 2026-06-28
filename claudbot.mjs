@@ -16,10 +16,14 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import {
+  existsSync, readFileSync, writeFileSync, mkdirSync, rmSync,
+  readdirSync, statSync, openSync, readSync, closeSync,
+} from "node:fs";
 import { parse as yamlParse } from "yaml";
 import readline from "node:readline";
 import path from "node:path";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 
 // ─── paths ───────────────────────────────────────────────────────────────────
@@ -284,6 +288,108 @@ async function cmdUpdate() {
   console.log("\n  ✓  Claudbot is up to date.\n");
 }
 
+// ─── rate-limit watchdog (interactive agent) ─────────────────────────────────
+//
+// The interactive agent runs Claude Code as a full TUI with stdio:"inherit", so
+// the parent can't read its output to detect a usage limit the way the headless
+// dream path does. Instead we tail Claude's own session transcript (a JSONL file
+// under ~/.claude/projects/<encoded-cwd>/) out-of-band. When Claude hits the
+// subscription limit it writes an `isApiErrorMessage` entry like:
+//   "You've hit your session limit · resets 2:10am"
+// We watch for that and hand off to the NIM fallback — without touching the TUI.
+
+const LIMIT_PATTERNS = [
+  /hit your (session|weekly|daily|usage|5-?hour) limit/i,
+  /usage limit/i,
+  /rate.?limit/i,
+  /quota.?exceeded/i,
+  /too many requests/i,
+  /reached your .*limit/i,
+];
+
+function looksLikeUsageLimit(text) {
+  return LIMIT_PATTERNS.some((re) => re.test(text));
+}
+
+// Claude Code stores each project's transcripts in a directory whose name is the
+// absolute cwd with every non-alphanumeric char replaced by a dash.
+function projectDirForCwd(cwd) {
+  const encoded = path.resolve(cwd).replace(/[^a-zA-Z0-9]/g, "-");
+  return path.join(os.homedir(), ".claude", "projects", encoded);
+}
+
+// True if a transcript line is an API error message reporting a usage limit
+// (and not, say, a 401 auth failure — those aren't transient and shouldn't
+// silently swap providers).
+function transcriptLineIsLimit(line) {
+  let entry;
+  try { entry = JSON.parse(line); } catch { return false; }
+  if (entry?.isApiErrorMessage !== true) return false;
+  let content = entry?.message?.content;
+  if (Array.isArray(content)) {
+    content = content.map((b) => (b && typeof b.text === "string" ? b.text : "")).join(" ");
+  }
+  return typeof content === "string" && looksLikeUsageLimit(content);
+}
+
+// Poll the project's transcript dir for new lines written after `sinceMs` and
+// fire `onDetected()` once a usage-limit entry appears. Returns a stop fn.
+function watchForRateLimit(cwd, sinceMs, onDetected) {
+  const dir = projectDirForCwd(cwd);
+  const offsets = new Map(); // file -> byte offset already scanned
+  let stopped = false;
+
+  const poll = () => {
+    if (stopped) return;
+    let files = [];
+    try { files = readdirSync(dir).filter((f) => f.endsWith(".jsonl")); } catch { return; }
+
+    for (const f of files) {
+      const full = path.join(dir, f);
+      let st;
+      try { st = statSync(full); } catch { continue; }
+      // Ignore transcripts from earlier sessions (a 2s slop covers clock skew).
+      if (st.mtimeMs < sinceMs - 2000) continue;
+
+      const start = offsets.get(full) ?? 0;
+      if (st.size <= start) continue;
+
+      let text;
+      try {
+        const fd = openSync(full, "r");
+        const buf = Buffer.alloc(st.size - start);
+        readSync(fd, buf, 0, buf.length, start);
+        closeSync(fd);
+        text = buf.toString("utf8");
+      } catch { continue; }
+
+      // Only consume up to the last complete line; leave any partial tail.
+      const lastNl = text.lastIndexOf("\n");
+      if (lastNl === -1) continue;
+      offsets.set(full, start + Buffer.byteLength(text.slice(0, lastNl + 1), "utf8"));
+
+      for (const line of text.slice(0, lastNl).split("\n")) {
+        if (line.trim() && transcriptLineIsLimit(line)) {
+          stopped = true;
+          clearInterval(timer);
+          onDetected();
+          return;
+        }
+      }
+    }
+  };
+
+  const timer = setInterval(poll, 1500);
+  return () => { stopped = true; clearInterval(timer); };
+}
+
+// After hard-killing the TUI, put the terminal back into a sane state (leave the
+// alternate screen, restore the cursor, drop raw mode) before the NIM REPL.
+function resetTerminal() {
+  try { if (process.stdin.isTTY) process.stdin.setRawMode(false); } catch { /* ignore */ }
+  process.stdout.write("\x1b[?1049l\x1b[?25h\x1b[0m\n");
+}
+
 // ─── NIM fallback REPL ───────────────────────────────────────────────────────
 
 const SPINNER_FRAMES = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
@@ -445,6 +551,10 @@ async function cmdStart(argv) {
 
   const claudeArgs = [...MODE_FLAGS[modeArg], ...loadDisallowedTools()];
 
+  // Whether a NIM fallback is even possible — without a key, killing a working
+  // Claude session to drop into a dead REPL would be worse than the limit itself.
+  const nimAvailable = Boolean(process.env.NIM_API_KEY);
+
   // Spawn Claude and keep restarting whenever the restart flag is set
   const startClaude = async () => {
     const claude = spawn("claude", claudeArgs, {
@@ -456,7 +566,21 @@ async function cmdStart(argv) {
     // Write PID so `claudbot restart` can signal this process
     try { writeFileSync(PID_FILE, String(claude.pid)); } catch { /* non-fatal */ }
 
+    // Watch Claude's transcript for a usage-limit message and pre-empt it by
+    // killing the TUI so the exit handler routes us into the NIM fallback. Only
+    // armed when NIM is actually configured.
+    let rateLimited = false;
+    const stopWatch = nimAvailable
+      ? watchForRateLimit(CLAUDBOT_ROOT, Date.now(), () => {
+          if (rateLimited) return;
+          rateLimited = true;
+          console.log(`\n[claudbot] Claude Code usage limit reached — switching to NIM fallback…`);
+          try { claude.kill("SIGTERM"); } catch { /* already gone */ }
+        })
+      : () => {};
+
     claude.on("error", (err) => {
+      stopWatch();
       rmSync(PID_FILE, { force: true });
       if (err.code === "ENOENT") {
         console.error("\n[claudbot] `claude` not found. Install: npm install -g @anthropic-ai/claude-code");
@@ -467,6 +591,7 @@ async function cmdStart(argv) {
     });
 
     claude.on("exit", async (code, signal) => {
+      stopWatch();
       rmSync(PID_FILE, { force: true });
 
       // Restart requested from another terminal
@@ -474,6 +599,12 @@ async function cmdStart(argv) {
         rmSync(RESTART_FLAG, { force: true });
         console.log("\n[claudbot] Restarting…\n");
         return startClaude();
+      }
+
+      // Usage limit detected mid-session — fall back regardless of exit code/signal
+      if (rateLimited) {
+        resetTerminal();
+        return nimRepl();
       }
 
       // Clean exit — user typed /exit or Ctrl+C
