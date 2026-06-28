@@ -9,8 +9,8 @@ Use sub-agents when a task would benefit from a different model or a specialized
 
 ## When to delegate
 
-- User asks for deep research or long-form summarization → `researcher`
-- Task requires heavy reasoning, comparison, or multi-step evaluation → `nemotron`
+- Writing, reviewing, refactoring, or debugging code → `coder` (DeepSeek)
+- Deep research, summarization, reasoning, planning, or comparison → `researcher` (Nemotron)
 - User explicitly asks you to use a specific agent
 
 ## Protocol
@@ -35,4 +35,4 @@ Use sub-agents when a task would benefit from a different model or a specialized
 
 - Sub-agent calls are **stateless** — each call is a fresh context window for that model.
 - If an agent returns an error (endpoint down, key missing), tell the user clearly and offer to handle it yourself instead.
-- You can call multiple agents sequentially for complex tasks (e.g., researcher feeds into nemotron for deeper analysis).
+- You can call multiple agents sequentially for complex tasks (e.g., `researcher` gathers context that feeds into a `coder` implementation task).

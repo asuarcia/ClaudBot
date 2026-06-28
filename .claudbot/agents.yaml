@@ -12,20 +12,22 @@
 # ------------------------------------------------------------------
 
 agents:
-  - name: researcher
-    model: qwen2.5:7b
-    endpoint: http://localhost:11434/v1
-    apiKeyEnv: null
+  - name: coder
+    model: deepseek-ai/deepseek-v4-pro
+    endpoint: https://integrate.api.nvidia.com/v1
+    apiKeyEnv: NIM_API_KEY
     jobDescription: >
-      Research topics, summarize documents, and answer factual questions.
-      Best for: web research, summarization, literature review, factual lookups.
-      Returns well-structured markdown.
+      Writing, reviewing, refactoring, and debugging code (DeepSeek).
+      Best for: implementing features, fixing bugs, refactors, code review,
+      and technical problem solving. Give it the full code/context it needs —
+      it has no prior conversation history.
 
-  - name: nemotron
+  - name: researcher
     model: nvidia/llama-3.3-nemotron-super-49b-v1
     endpoint: https://integrate.api.nvidia.com/v1
     apiKeyEnv: NIM_API_KEY
     jobDescription: >
-      Deep reasoning and complex multi-step problem solving.
-      Best for: hard analytical tasks, long-context reasoning, evaluation,
-      comparing options, or any task that benefits from an extended thinking budget.
+      Research, reasoning, summarization, and planning (Nemotron).
+      Best for: web/topic research, literature review, deep multi-step
+      reasoning, comparing options, and long-context analysis.
+      Returns well-structured markdown.
