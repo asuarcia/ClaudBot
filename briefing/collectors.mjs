@@ -50,11 +50,13 @@ export async function collectHackerNews(cfg = {}) {
   const minPoints = cfg.minPoints ?? 80;
   const tags = cfg.tags ?? "story";
   try {
+    // The Algolia HN index no longer allows numericFilters on `points`, so we
+    // pull the front page and filter by score client-side.
     const data = await getJSON(
-      `https://hn.algolia.com/api/v1/search?tags=${encodeURIComponent(tags)}&hitsPerPage=60&numericFilters=points>=${minPoints}`,
+      `https://hn.algolia.com/api/v1/search?tags=${encodeURIComponent(tags)}&hitsPerPage=80`,
     );
     return (data.hits ?? [])
-      .filter((h) => h.title && (h.url || h.objectID))
+      .filter((h) => h.title && (h.url || h.objectID) && (h.points ?? 0) >= minPoints)
       .map((h) => ({
         id: `hn:${h.objectID}`,
         title: clean(h.title),

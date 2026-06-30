@@ -3,8 +3,8 @@
 
 hackernews:
   enabled: true
-  minPoints: 80          # only stories above this score
-  tags: story
+  minPoints: 50          # client-side score floor
+  tags: front_page       # currently-trending stories (not all-time viral)
 
 arxiv:
   enabled: true
@@ -23,8 +23,6 @@ rss:
   feeds:
     - name: Simon Willison
       url: https://simonwillison.net/atom/everything/
-    - name: Anthropic News
-      url: https://www.anthropic.com/news/rss.xml
     - name: OpenAI Blog
       url: https://openai.com/blog/rss.xml
     - name: Google AI Blog

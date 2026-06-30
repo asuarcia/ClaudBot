@@ -37,6 +37,7 @@ All commands go through `claudbot`:
 | `claudbot recall <text>` | Search past sessions for `<text>` |
 | `claudbot briefing` | Build the morning "news to learn from" digest (AI/ML/dev) |
 | `claudbot dashboard` | Serve the morning command center at `localhost:4500` |
+| `claudbot night` | Run all idle processes together (dream + briefing + dashboard) |
 | `claudbot channels` | Start the WhatsApp / Telegram webhook server |
 | `claudbot dream` | Run background tasks once (memory, research, reflection) |
 | `claudbot dream --watch` | Run background tasks on a continuous schedule |
@@ -257,8 +258,16 @@ claudbot dashboard           # open http://localhost:4500
 - **Dashboard** renders the learning cards plus local panels (recent commits
   across your repos, dream highlights, "where we left off"). Gmail / Notion /
   Calendar panels are stubbed pending phase-2 connectors.
+- **`claudbot night`** runs dream + briefing + dashboard together under one
+  supervisor that restarts any that crash — the bundle meant to run overnight.
 
-Full design + roadmap (NUC deployment, personal connectors, TradeAlgo reuse):
+### Run it on the NUC (so your PC can sleep)
+
+`night` needs only Node 22 + a `NIM_API_KEY`, so it runs on a tiny Proxmox VM.
+See [`deploy/`](deploy/README.md): `nuc-setup.sh` provisions the VM and installs
+the `claudbot-night` systemd service; open `http://<vm-ip>:4500` in the morning.
+
+Full design + roadmap (personal connectors, TradeAlgo reuse):
 [`docs/morning-dashboard.md`](docs/morning-dashboard.md).
 
 ---

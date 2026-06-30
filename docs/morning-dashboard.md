@@ -97,10 +97,14 @@ reuses the same rank → curate → digest → dashboard skeleton.
 
 ## Build phases
 
-1. **Briefing core** *(in progress)* — HN + arXiv collectors, dedup, rank, `fast`
-   curation, JSON digest, `claudbot briefing`.
-2. **More collectors** — Reddit, RSS list, GitHub trending.
-3. **Dashboard** — express app, news + local panels (git, dream, recall) first.
-4. **Personal connectors** — Gmail (important only), Notion, Calendar with OAuth.
-5. **NUC deploy** — VM + systemd + Proxmox provisioning.
-6. **Port to TradeAlgo.**
+1. ✅ **Briefing core** — HN + arXiv + Reddit + RSS collectors, dedup, rank,
+   `fast` curation, JSON digest, `claudbot briefing`.
+2. ✅ **Dashboard** — express app, news + local panels (git, dream, recall).
+3. ✅ **Night supervisor** — `claudbot night` runs dream + briefing + dashboard
+   together with crash-restart (`night.mjs`).
+4. ✅ **NUC deploy kit** — `deploy/`: `nuc-setup.sh`, `claudbot-night.service`,
+   `proxmox-provision.mjs`.
+5. ⬜ **Personal connectors** — Gmail (important only), Notion, Calendar with
+   OAuth, under `briefing/connectors/` (the dashboard already has the stub slots).
+6. ⬜ **GitHub Trending / Bluesky** collectors; a local todos panel.
+7. ⬜ **Port to TradeAlgo** (finance sources + panels, same skeleton).

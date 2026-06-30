@@ -1,0 +1,19 @@
+[Unit]
+Description=Claudbot night — idle processes (dream + briefing + dashboard)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=claudbot
+WorkingDirectory=/opt/claudbot
+EnvironmentFile=/opt/claudbot/.env
+# night.mjs supervises dream + briefing + dashboard and restarts each on crash.
+ExecStart=/usr/bin/node /opt/claudbot/night.mjs --port 4500
+Restart=on-failure
+RestartSec=10
+# Briefing/dream make outbound HTTPS calls; no special privileges needed.
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
