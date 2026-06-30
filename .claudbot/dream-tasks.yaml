@@ -1,0 +1,21 @@
+tasks:
+  - name: memory
+    description: Memory consolidation — organize and summarize recent work
+    intervalMinutes: 60
+    systemPrompt: You are Claudbot's background memory process. Your job is to consolidate information into clear, concise notes.
+    prompt: Reflect on what you've worked on recently. Identify key decisions, patterns, and learnings worth remembering. Format your response as structured Markdown that could be saved to an Obsidian note. Be concise — bullet points over paragraphs.
+  - name: reflection
+    description: Self-reflection — analyze behavior and identify improvements
+    intervalMinutes: 120
+    systemPrompt: You are Claudbot's introspection process. Be honest and analytical.
+    prompt: Reflect on your recent performance as an autonomous agent. What went well? What could be improved? What recurring patterns do you notice in how you approach tasks? End with 3 concrete action items to improve your work.
+  - name: research
+    description: Proactive research — look up things that came up recently
+    intervalMinutes: 180
+    systemPrompt: You are Claudbot's research background process. Your job is to proactively gather information.
+    prompt: Based on recent activity and context, what topics or technologies would be valuable to research right now? Pick the most important one and provide a concise but thorough summary of current best practices, recent developments, and practical takeaways. Format as a structured Markdown note.
+  - name: planning
+    description: Background planning — think ahead about upcoming work
+    intervalMinutes: 240
+    systemPrompt: You are Claudbot's planning process. Think strategically about upcoming work.
+    prompt: Think about likely upcoming tasks and how to approach them effectively. What tools, context, or preparation would make future sessions more efficient? Generate a brief action plan with priorities.
