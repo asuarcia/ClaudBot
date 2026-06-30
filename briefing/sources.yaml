@@ -1,0 +1,37 @@
+# Briefing sources. Each collector reads the block it cares about.
+# Disable any source by setting `enabled: false`.
+
+hackernews:
+  enabled: true
+  minPoints: 80          # only stories above this score
+  tags: story
+
+arxiv:
+  enabled: true
+  categories: [cs.AI, cs.LG, cs.CL, cs.SE]
+  maxPerCategory: 8
+
+reddit:
+  enabled: true
+  subs: [MachineLearning, LocalLLaMA, programming]
+  window: day            # top of the last day
+  minScore: 100
+
+# Generic RSS/Atom feeds — high-signal AI/ML/dev blogs & aggregators.
+rss:
+  enabled: true
+  feeds:
+    - name: Simon Willison
+      url: https://simonwillison.net/atom/everything/
+    - name: Anthropic News
+      url: https://www.anthropic.com/news/rss.xml
+    - name: OpenAI Blog
+      url: https://openai.com/blog/rss.xml
+    - name: Google AI Blog
+      url: https://blog.google/technology/ai/rss/
+    - name: Sebastian Raschka
+      url: https://magazine.sebastianraschka.com/feed
+    - name: Lobsters
+      url: https://lobste.rs/rss
+    - name: Hugging Face Blog
+      url: https://huggingface.co/blog/feed.xml

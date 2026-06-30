@@ -153,6 +153,9 @@ function cmdHelp() {
     channels           Start WhatsApp / Telegram webhook server
     dream              Run background tasks once
     dream --watch      Run background tasks on a schedule
+    briefing           Build the morning news-to-learn digest once
+    briefing --watch   Rebuild the digest on a schedule
+    dashboard          Serve the morning command center (http://localhost:4500)
     onboard            Run the interactive setup wizard
     update             Pull latest code from GitHub + reinstall deps
     doctor             Check that everything is configured correctly
@@ -840,6 +843,8 @@ async function main() {
     case "recall":   return cmdRecall(rest);
     case "channels": return runScript("channel-server.mjs", rest);
     case "dream":    return runScript("dream.mjs", rest);
+    case "briefing": return runScript("briefing.mjs", rest);
+    case "dashboard":return runScript("dashboard.mjs", rest);
     case "onboard":  return runScript("scripts/onboard.mjs", rest);
     case "update":   return cmdUpdate();
     case "doctor":   return cmdDoctor();

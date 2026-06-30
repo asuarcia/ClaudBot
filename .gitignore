@@ -22,3 +22,6 @@ NemoClaw-main/
 .claudbot/conversation-index.json
 .claudbot/.pid
 .claudbot/.restart
+
+# briefing digests (generated each run, machine-specific)
+briefing/data/

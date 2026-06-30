@@ -1,0 +1,49 @@
+# What the briefing should bias toward — used for topic-match scoring.
+# Edit freely. Higher-weight terms pull matching items up the ranking.
+
+interests:
+  high:        # 3x weight
+    - LLM
+    - agent
+    - agentic
+    - RAG
+    - fine-tuning
+    - inference
+    - transformer
+    - prompt engineering
+    - model context protocol
+    - MCP
+    - local model
+    - open weights
+  medium:      # 2x weight
+    - machine learning
+    - neural network
+    - reasoning
+    - benchmark
+    - dataset
+    - GPU
+    - quantization
+    - embeddings
+    - vector database
+    - distributed training
+  dev:         # 1.5x weight — general software craft worth learning
+    - architecture
+    - postmortem
+    - performance
+    - debugging
+    - refactor
+    - systems design
+    - database internals
+    - compiler
+    - rust
+    - typescript
+
+# Items matching these are downranked (noise / not learn-from).
+mute:
+  - hiring
+  - funding round
+  - acquired
+  - layoffs
+  - stock
+  - giveaway
+  - is hiring
