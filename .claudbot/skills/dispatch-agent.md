@@ -5,34 +5,58 @@ description: Protocol for routing tasks to sub-agents via claudbot-exec MCP tool
 
 # Dispatching to Sub-agents
 
-Use sub-agents when a task would benefit from a different model or a specialized capability. Do not delegate tasks you can handle well yourself.
+**Delegation is mandatory, not optional.** You are an orchestrator. Whenever a
+piece of work matches a registered agent's specialty, it goes to that agent —
+even if you could do it yourself. "I could do it faster myself" is not a reason
+to skip the roster. The only work you do directly is orchestration: deciding
+what to delegate, giving each agent the context it needs, integrating results,
+and the native file/git/bash/edit operations that actually apply the agents'
+output to disk.
 
-## When to delegate
+## The roster (see agents.yaml for exact models)
 
-- Writing, reviewing, refactoring, or debugging code → `coder` (DeepSeek)
-- Deep research, summarization, reasoning, planning, or comparison → `researcher` (Nemotron)
-- User explicitly asks you to use a specific agent
+- `coder` (DeepSeek V4 Pro) — writing, reviewing, refactoring, debugging code
+- `researcher` (Nemotron 3 Ultra) — deep research, reasoning, planning, comparison
+- `fast` (Nemotron 3 Nano) — quick/cheap tasks: summaries, classification, extraction, short drafts
+- `agent` (Kimi K2.6) — agentic multi-step automation, tool-use planning, agentic coding
+- `longcontext` (DeepSeek V4 Flash, 1M ctx) — long documents, large-codebase sweeps, log analysis
+
+## Routing rules
+
+| Task | Send to |
+|------|---------|
+| Implement / fix / refactor / review code | `coder` |
+| Research, plan, compare options, reason deeply | `researcher` |
+| Quick summary, classify, extract, reformat, short text | `fast` |
+| Multi-step automation, workflow/tool-use design, agentic coding | `agent` |
+| Anything with a huge input (long docs, big codebases, logs) | `longcontext` |
+
+When a task spans categories, decompose it and chain agents (e.g. `researcher`
+plans → `coder` implements → `fast` writes the summary).
 
 ## Protocol
 
-1. **Check what's available** (do this once per session or when unsure):
+1. **Know the roster.** Call `list_agents()` once per session.
+
+2. **Craft a focused, self-contained prompt.** Each call is stateless — the
+   sub-agent has zero conversation history. Paste in all the code, context, and
+   constraints it needs in the single prompt.
+
+3. **Call the agent:**
    ```
-   list_agents()
+   run_agent(name="coder", prompt="<full task + context>")
    ```
 
-2. **Craft a focused prompt** — the sub-agent has no conversation history. Give it all context it needs in a single prompt.
+4. **Integrate, don't paste.** Synthesize the agent's response into your reply,
+   apply its output to the actual files yourself, verify it, and add your own
+   commentary. Briefly tell the user which agent you used and why.
 
-3. **Call the agent**:
-   ```
-   run_agent(name="researcher", prompt="Summarize the current state of MCP-based agent architectures...")
-   ```
-
-4. **Integrate the result** — synthesize the agent's response into your reply. Don't just paste it raw; add your own commentary or follow-up.
-
-5. **Save useful outputs** to Obsidian if they're worth keeping (see memory.md skill).
+5. **Save useful outputs** to Obsidian when worth keeping (see memory.md).
 
 ## Notes
 
-- Sub-agent calls are **stateless** — each call is a fresh context window for that model.
-- If an agent returns an error (endpoint down, key missing), tell the user clearly and offer to handle it yourself instead.
-- You can call multiple agents sequentially for complex tasks (e.g., `researcher` gathers context that feeds into a `coder` implementation task).
+- Sub-agent calls are **stateless** — fresh context window every time.
+- If an agent errors (endpoint down, key missing, bad model ID), tell the user
+  clearly, then either retry via a different agent or fall back to doing it
+  yourself — never silently stall.
+- Chain agents for complex work; one agent's output can become the next's input.

@@ -9,6 +9,9 @@
 #   endpoint    - base URL of any OpenAI-compatible API
 #   apiKeyEnv   - env var holding the API key (null for local endpoints)
 #   jobDescription - what this agent is good at (guides Claude's routing)
+#
+# Models verified against the live build.nvidia.com/models catalog
+# (2026-06-29). All run on the NVIDIA NIM OpenAI-compatible endpoint.
 # ------------------------------------------------------------------
 
 agents:
@@ -17,17 +20,50 @@ agents:
     endpoint: https://integrate.api.nvidia.com/v1
     apiKeyEnv: NIM_API_KEY
     jobDescription: >
-      Writing, reviewing, refactoring, and debugging code (DeepSeek).
-      Best for: implementing features, fixing bugs, refactors, code review,
-      and technical problem solving. Give it the full code/context it needs —
-      it has no prior conversation history.
+      Writing, reviewing, refactoring, and debugging code (DeepSeek V4 Pro —
+      strongest coding model in the catalog). Best for: implementing features,
+      fixing bugs, non-trivial refactors, code review, and technical problem
+      solving. Give it the full code/context it needs — it has no prior
+      conversation history.
 
   - name: researcher
-    model: nvidia/llama-3.3-nemotron-super-49b-v1
+    model: nvidia/nemotron-3-ultra-550b-a55b
     endpoint: https://integrate.api.nvidia.com/v1
     apiKeyEnv: NIM_API_KEY
     jobDescription: >
-      Research, reasoning, summarization, and planning (Nemotron).
-      Best for: web/topic research, literature review, deep multi-step
-      reasoning, comparing options, and long-context analysis.
-      Returns well-structured markdown.
+      Deep research, reasoning, summarization, and planning (Nemotron 3 Ultra,
+      550B MoE — the catalog's flagship reasoning model). Best for: web/topic
+      research, literature review, multi-step reasoning, architecture and
+      project planning, comparing options, and trade-off analysis. Returns
+      well-structured markdown.
+
+  - name: fast
+    model: nvidia/nemotron-3-nano-omni-30b-a3b-reasoning
+    endpoint: https://integrate.api.nvidia.com/v1
+    apiKeyEnv: NIM_API_KEY
+    jobDescription: >
+      Fast, cheap, high-volume tasks (Nemotron 3 Nano, 30B-a3b). Best for:
+      quick summaries, classification, extraction, reformatting, drafting
+      short text, simple lookups, and anything where speed and low cost matter
+      more than maximum depth. Use this instead of researcher when the task is
+      light.
+
+  - name: agent
+    model: moonshotai/kimi-k2.6
+    endpoint: https://integrate.api.nvidia.com/v1
+    apiKeyEnv: NIM_API_KEY
+    jobDescription: >
+      Agentic, multi-step tool-use and automation (Kimi K2.6 — strong agentic
+      + coding hybrid). Best for: designing and reasoning through automation
+      workflows, multi-tool task plans, scripting that requires dynamic
+      decision-making, and agentic coding tasks that mix reasoning with code.
+
+  - name: longcontext
+    model: deepseek-ai/deepseek-v4-flash
+    endpoint: https://integrate.api.nvidia.com/v1
+    apiKeyEnv: NIM_API_KEY
+    jobDescription: >
+      Large-context analysis (DeepSeek V4 Flash — 284B MoE, 1M-token context,
+      fast). Best for: analyzing long documents, reviewing or sweeping large
+      codebases, log/transcript analysis, and any task where the input is too
+      big for the other agents. Also a fast fallback for coding/agentic work.

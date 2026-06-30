@@ -15,6 +15,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync } fr
 import { parse as yamlParse, stringify as yamlStringify } from "yaml";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveAgent } from "./providers/agents.mjs";
 
 // ─── paths ───────────────────────────────────────────────────────────────────
 
@@ -39,15 +40,31 @@ loadDotEnv();
 
 const NIM_BASE  = (process.env.NIM_BASE_URL ?? "https://integrate.api.nvidia.com/v1").replace(/\/$/, "");
 const NIM_KEY   = process.env.NIM_API_KEY ?? "";
-const NIM_MODEL = process.env.NIM_MODEL   ?? "meta/llama-3.1-70b-instruct";
 
-async function nimComplete(systemPrompt, userPrompt) {
+// Dreaming runs on a dedicated agent (default: `researcher` = Nemotron 3 Ultra),
+// chosen separately from the fallback agent so background reflection and a
+// rate-limit fallback never share one model. Resolved from agents.yaml by name
+// via CLAUDBOT_DREAM_AGENT; individual tasks may override with their own
+// `agent:` field. Falls back to NIM_MODEL if nothing is registered.
+const DREAM_AGENT  = resolveAgent("CLAUDBOT_DREAM_AGENT", "researcher");
+const DREAM_MODEL  = DREAM_AGENT?.model ?? process.env.NIM_MODEL ?? "meta/llama-3.1-70b-instruct";
+
+// Resolve the model for a task: its own `agent:` override, else the dream agent.
+function modelForTask(task) {
+  if (task?.agent) {
+    const a = resolveAgent("", task.agent);
+    if (a?.model) return a.model;
+  }
+  return DREAM_MODEL;
+}
+
+async function nimComplete(systemPrompt, userPrompt, model = DREAM_MODEL) {
   if (!NIM_KEY) throw new Error("NIM_API_KEY not set");
   const res = await fetch(`${NIM_BASE}/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${NIM_KEY}` },
     body: JSON.stringify({
-      model: NIM_MODEL,
+      model,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user",   content: userPrompt },
@@ -142,7 +159,7 @@ async function runTask(task) {
   console.log(`\n[dream] Running: ${task.name} — ${task.description}`);
 
   try {
-    const result = await nimComplete(task.systemPrompt, task.prompt);
+    const result = await nimComplete(task.systemPrompt, task.prompt, modelForTask(task));
     const elapsed = ((Date.now() - start) / 1000).toFixed(1);
 
     console.log(`[dream] ✓ ${task.name} completed in ${elapsed}s`);
@@ -203,7 +220,7 @@ async function main() {
 
   console.log(`
 [claudbot dream mode]
-  Model:  ${NIM_MODEL}
+  Agent:  ${DREAM_AGENT?.name ?? "(unregistered)"}  →  ${DREAM_MODEL}
   Log:    ${DREAM_LOG}
   Tasks:  ${TASKS_FILE}
 `);

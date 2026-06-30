@@ -42,6 +42,23 @@ export function findAgent(name) {
   return agent;
 }
 
+/**
+ * Resolve an agent for a role (fallback REPL, dreaming, …) from an env var that
+ * names the agent, with a default. Returns the agent record or null if neither
+ * the env-named nor the default agent is registered.
+ */
+export function resolveAgent(envVar, defaultName) {
+  const name = (process.env[envVar] || defaultName || "").trim();
+  if (!name) return null;
+  try { return findAgent(name); } catch { return null; }
+}
+
+/** API key for an agent record (honors its apiKeyEnv; null for keyless local). */
+export function agentApiKey(agent) {
+  const usesKey = agent?.apiKeyEnv && agent.apiKeyEnv !== "null" && agent.apiKeyEnv !== null;
+  return usesKey ? process.env[agent.apiKeyEnv] : undefined;
+}
+
 /** One-line summaries for prompting / display. */
 export function describeAgents() {
   return loadAgents()

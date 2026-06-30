@@ -5,6 +5,9 @@ node_modules/
 openclaw-main/
 NemoClaw-main/
 
+# update command backups
+.update-backup-*/
+
 # logs
 *.log
 
@@ -16,5 +19,6 @@ NemoClaw-main/
 .claudbot/channels.yaml
 .claudbot/dream-log.md
 .claudbot/channel-log.md
+.claudbot/conversation-index.json
 .claudbot/.pid
 .claudbot/.restart

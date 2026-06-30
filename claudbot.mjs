@@ -147,6 +147,9 @@ function cmdHelp() {
     start              Launch the agent  (default when no command given)
       --mode <mode>    Permission mode: full | auto | safe | readonly
     restart            Restart the running agent without closing the terminal
+    recall             List past sessions (where you left off)
+    recall last        Summarize the previous session
+    recall <text>      Search past sessions for <text>
     channels           Start WhatsApp / Telegram webhook server
     dream              Run background tasks once
     dream --watch      Run background tasks on a schedule
@@ -286,6 +289,88 @@ async function cmdUpdate() {
   }
 
   console.log("\n  ✓  Claudbot is up to date.\n");
+}
+
+// ─── recall command (conversation memory) ────────────────────────────────────
+//
+// Browse / search past Claudbot sessions so you can pick up where you left off
+// after a reboot. Backed by memory.mjs, which parses Claude Code's own JSONL
+// transcripts (no extra capture needed).
+
+async function cmdRecall(argv) {
+  const mem = await import("./memory.mjs");
+  const agents = await import("./providers/agents.mjs");
+  const sub = (argv.find((a) => !a.startsWith("-")) ?? "").toLowerCase();
+  const query = argv.filter((a) => !a.startsWith("-")).join(" ").trim();
+
+  // `recall last` / `recall resume` — a richer LLM summary of the previous session.
+  if (sub === "last" || sub === "resume") {
+    const [last] = mem.listSessions({ limit: 1 });
+    if (!last) { console.log("\n  No past sessions found yet.\n"); return; }
+    console.log(`\n  ${C.cyan}${C.bold}Where we left off${C.reset}  ${C.dim}· ${mem.relativeTime(last.end)} · ${mem.shortId(last.id)}${C.reset}\n`);
+    const haveKey = Boolean(process.env.NIM_API_KEY);
+    const sumAgent = process.env.CLAUDBOT_SUMMARY_AGENT || "fast";
+    if (haveKey) process.stdout.write(`  ${C.dim}(summarizing via ${sumAgent}…)${C.reset}\r`);
+    const summary = await mem.summarizeSession(last, {
+      runAgent: haveKey ? agents.runAgent : null,
+      agentName: sumAgent,
+    });
+    process.stdout.write("\x1b[K");
+    console.log(summary.split("\n").map((l) => "  " + l).join("\n"));
+    console.log();
+    return;
+  }
+
+  // `recall <query>` — full-text search across all past sessions.
+  if (query && sub !== "list") {
+    const hits = mem.searchSessions(query);
+    if (hits.length === 0) { console.log(`\n  No sessions mention "${query}".\n`); return; }
+    console.log(`\n  ${C.bold}${hits.length} session(s) mention "${query}"${C.reset}\n`);
+    for (const h of hits) {
+      console.log(`  ${C.green}${mem.shortId(h.id)}${C.reset}  ${C.dim}${mem.relativeTime(h.end)} · ${h.matches} match(es)${C.reset}`);
+      console.log(`    ${C.white}${h.topic}${C.reset}`);
+      if (h.snippet) console.log(`    ${C.dim}${h.snippet}${C.reset}`);
+      console.log();
+    }
+    return;
+  }
+
+  // `recall` / `recall list` — list recent sessions.
+  const sessions = mem.listSessions({ limit: 12 });
+  if (sessions.length === 0) { console.log("\n  No past sessions found yet.\n"); return; }
+  console.log(`\n  ${C.bold}Recent Claudbot sessions${C.reset}  ${C.dim}(newest first)${C.reset}\n`);
+  for (const s of sessions) {
+    console.log(`  ${C.green}${mem.shortId(s.id)}${C.reset}  ${C.dim}${mem.relativeTime(s.end).padEnd(8)} · ${s.userTurns} turn(s)${C.reset}`);
+    console.log(`    ${C.white}${s.topic}${C.reset}`);
+  }
+  console.log(`\n  ${C.dim}→ ${C.reset}${C.cyan}claudbot recall last${C.reset}${C.dim} for a summary of where you left off, or ${C.reset}${C.cyan}claudbot recall <text>${C.reset}${C.dim} to search.${C.reset}\n`);
+}
+
+// Compact "where we left off" banner shown at the top of `claudbot start`.
+// Heuristic only (no LLM) so startup stays instant.
+async function printLastSessionBanner() {
+  try {
+    const mem = await import("./memory.mjs");
+    const [last] = mem.listSessions({ limit: 1 });
+    if (!last) return;
+
+    const W = 62; // inner width between the box borders
+    const clean = (s) => (s || "").replace(/\s+/g, " ").trim();
+    const fit = (s) => (s.length > W ? s.slice(0, W - 1) + "…" : s).padEnd(W);
+
+    const rel = mem.relativeTime(last.end);
+    const head = `Last session · ${rel} `;
+    const topic = clean(last.topic);
+    const next  = clean(last.lastUser);
+
+    console.log(`  ${C.dim}┌─ ${C.bold}${head}${C.reset}${C.dim}${"─".repeat(Math.max(0, W - head.length))}─┐${C.reset}`);
+    console.log(`  ${C.dim}│${C.reset} ${C.white}${fit(topic)}${C.reset} ${C.dim}│${C.reset}`);
+    if (next && next !== topic) {
+      console.log(`  ${C.dim}│${C.reset} ${C.dim}${fit("last: " + next)}${C.reset} ${C.dim}│${C.reset}`);
+    }
+    console.log(`  ${C.dim}└${"─".repeat(W + 2)}┘${C.reset}`);
+    console.log(`  ${C.cyan}claudbot recall last${C.reset}${C.dim} to resume where you left off.${C.reset}\n`);
+  } catch { /* memory is best-effort — never block startup */ }
 }
 
 // ─── rate-limit watchdog (interactive agent) ─────────────────────────────────
@@ -462,8 +547,18 @@ const AGENT_TOOLS = [
 async function nimRepl() {
   const { NimProvider } = await import("./providers/nim.mjs");
   const agents = await import("./providers/agents.mjs");
-  const nim = new NimProvider();
-  const model = process.env.NIM_MODEL ?? "nim";
+
+  // The fallback REPL runs on a dedicated agent (default: `agent` = Kimi K2.6),
+  // chosen separately from the dream agent so a rate-limit event and a dream
+  // cycle never contend for the same model. Resolved from the registry by name
+  // via CLAUDBOT_FALLBACK_AGENT; falls back to NIM_MODEL if unregistered.
+  const fbAgent = agents.resolveAgent("CLAUDBOT_FALLBACK_AGENT", "agent");
+  const model   = fbAgent?.model ?? process.env.NIM_MODEL ?? "nim";
+  const nim = new NimProvider({
+    model:   fbAgent?.model,
+    baseUrl: fbAgent?.endpoint,
+    apiKey:  agents.agentApiKey(fbAgent) ?? process.env.NIM_API_KEY,
+  });
 
   if (!nim.isConfigured) {
     console.error(
@@ -655,6 +750,7 @@ async function cmdStart(argv) {
 
   patchSettings();
   printBanner(modeArg);
+  await printLastSessionBanner();
 
   const claudeArgs = [...MODE_FLAGS[modeArg], ...loadDisallowedTools()];
 
@@ -741,6 +837,7 @@ async function main() {
   switch (cmd) {
     case "start":    return cmdStart(rest);
     case "restart":  return cmdRestart();
+    case "recall":   return cmdRecall(rest);
     case "channels": return runScript("channel-server.mjs", rest);
     case "dream":    return runScript("dream.mjs", rest);
     case "onboard":  return runScript("scripts/onboard.mjs", rest);
