@@ -269,3 +269,97 @@ export function relativeTime(iso) {
 export function shortId(id) {
   return id.slice(0, 8);
 }
+
+// ─── auto-indexing ───────────────────────────────────────────────────────────
+//
+// Keeps conversation-index.json continuously up to date so `recall last` and
+// the startup banner always have a fresh LLM summary instead of computing one
+// on demand. Run automatically by claudbot.mjs (detached) on start and exit,
+// or manually: node memory.mjs index [--limit N] [--force] [--grace MS]
+
+/**
+ * Summarize any sessions whose cached summary is missing or stale.
+ * `graceMs` skips sessions modified more recently than that (the live,
+ * still-being-written session) — pass 0 when the session is known finished.
+ */
+export async function indexSessions({
+  runAgent, agentName, limit = 15, force = false, graceMs = 120_000, log = () => {},
+} = {}) {
+  const sessions = listSessions({ limit });
+  const index = loadIndex();
+  let pruned = 0;
+
+  // Prune entries for deleted transcripts
+  const allIds = new Set(listSessions({ includeBackground: true }).map((s) => s.id));
+  for (const id of Object.keys(index)) {
+    if (!allIds.has(id)) { delete index[id]; pruned++; }
+  }
+  if (pruned > 0) saveIndex(index);
+
+  const now = Date.now();
+  let indexed = 0;
+  for (const session of sessions) {
+    if (session.mtimeMs > now - graceMs) continue; // probably still live
+    const entry = index[session.id];
+    if (!force && entry && entry.mtimeMs === session.mtimeMs) continue;
+    try {
+      await summarizeSession(session, { runAgent, agentName }); // caches itself
+      log(`indexed ${shortId(session.id)} — ${session.topic}`);
+      indexed++;
+    } catch { /* per-session failures never stop the sweep */ }
+  }
+
+  return { indexed, pruned, total: sessions.length };
+}
+
+/** Cached summary entry {summary, topic, mtimeMs} for a session, or null. */
+export function cachedSummary(sessionId) {
+  const entry = loadIndex()[sessionId];
+  if (!entry?.summary) return null;
+  return { summary: entry.summary, topic: entry.topic, mtimeMs: entry.mtimeMs };
+}
+
+// ─── CLI entry (node memory.mjs index) ───────────────────────────────────────
+
+let runDirect = false;
+try {
+  const { realpathSync } = await import("node:fs");
+  runDirect =
+    realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+} catch { /* not run directly */ }
+
+if (runDirect && process.argv[2] === "index") {
+  // .env loader (never overrides real env)
+  const envPath = path.join(ROOT, ".env");
+  if (existsSync(envPath)) {
+    for (const line of readFileSync(envPath, "utf8").split("\n")) {
+      const m = line.trim().match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+      if (m && !(m[1] in process.env)) process.env[m[1]] = m[2].trim();
+    }
+  }
+
+  if (!process.env.NIM_API_KEY) {
+    console.log("NIM_API_KEY not set — nothing to index (summaries need an agent).");
+    process.exit(0);
+  }
+
+  let limit = 15, force = false, graceMs = 120_000;
+  for (let i = 3; i < process.argv.length; i++) {
+    if (process.argv[i] === "--limit" && process.argv[i + 1]) limit = parseInt(process.argv[++i], 10) || 15;
+    if (process.argv[i] === "--grace" && process.argv[i + 1]) graceMs = parseInt(process.argv[++i], 10) || 0;
+    if (process.argv[i] === "--force") force = true;
+  }
+
+  try {
+    const agents = await import("./providers/agents.mjs");
+    const agentName = process.env.CLAUDBOT_SUMMARY_AGENT || "fast";
+    const { indexed, pruned, total } = await indexSessions({
+      runAgent: agents.runAgent, agentName, limit, force, graceMs, log: console.log,
+    });
+    console.log(`done: indexed ${indexed}, pruned ${pruned} of ${total} sessions`);
+    process.exit(0);
+  } catch (e) {
+    console.error("index failed:", e.message);
+    process.exit(1);
+  }
+}

@@ -3,8 +3,8 @@
  * Claudbot CLI
  *
  * Usage:
- *   claudbot                   start the agent (default)
- *   claudbot start             same as above
+ *   claudbot                   interactive menu (default in a terminal)
+ *   claudbot start             launch the agent directly (skips the menu)
  *   claudbot start --mode auto with a specific permission mode
  *   claudbot channels          start WhatsApp/Telegram channel server
  *   claudbot dream             run background dream tasks once
@@ -144,7 +144,8 @@ function cmdHelp() {
   claudbot <command> [options]
 
   Commands:
-    start              Launch the agent  (default when no command given)
+    menu               Interactive Claudbot menu  (default in a terminal)
+    start              Launch the agent directly, skipping the menu
       --mode <mode>    Permission mode: full | auto | safe | readonly
     restart            Restart the running agent without closing the terminal
     recall             List past sessions (where you left off)
@@ -351,7 +352,8 @@ async function cmdRecall(argv) {
 }
 
 // Compact "where we left off" banner shown at the top of `claudbot start`.
-// Heuristic only (no LLM) so startup stays instant.
+// Prefers the cached LLM summary that the background indexer maintains
+// (instant — no network at startup); falls back to the raw heuristic.
 async function printLastSessionBanner() {
   try {
     const mem = await import("./memory.mjs");
@@ -365,16 +367,37 @@ async function printLastSessionBanner() {
     const rel = mem.relativeTime(last.end);
     const head = `Last session · ${rel} `;
     const topic = clean(last.topic);
-    const next  = clean(last.lastUser);
 
     console.log(`  ${C.dim}┌─ ${C.bold}${head}${C.reset}${C.dim}${"─".repeat(Math.max(0, W - head.length))}─┐${C.reset}`);
     console.log(`  ${C.dim}│${C.reset} ${C.white}${fit(topic)}${C.reset} ${C.dim}│${C.reset}`);
-    if (next && next !== topic) {
-      console.log(`  ${C.dim}│${C.reset} ${C.dim}${fit("last: " + next)}${C.reset} ${C.dim}│${C.reset}`);
+
+    const cached = mem.cachedSummary(last.id);
+    if (cached && cached.mtimeMs === last.mtimeMs && cached.summary) {
+      // Fresh auto-indexed summary — show up to 3 lines of it.
+      for (const l of cached.summary.split("\n").filter(Boolean).slice(0, 3)) {
+        console.log(`  ${C.dim}│ ${fit(clean(l))} │${C.reset}`);
+      }
+    } else {
+      // Heuristic fallback until the background indexer catches up.
+      const next = clean(last.lastUser);
+      if (next && next !== topic) {
+        console.log(`  ${C.dim}│${C.reset} ${C.dim}${fit("last: " + next)}${C.reset} ${C.dim}│${C.reset}`);
+      }
     }
     console.log(`  ${C.dim}└${"─".repeat(W + 2)}┘${C.reset}`);
     console.log(`  ${C.cyan}claudbot recall last${C.reset}${C.dim} to resume where you left off.${C.reset}\n`);
   } catch { /* memory is best-effort — never block startup */ }
+}
+
+// Fire-and-forget background pass that keeps conversation-index.json fresh.
+// Detached so it survives claudbot exiting; graceMs=0 right after a session
+// ends (the transcript is final), default grace while one may still be live.
+function spawnMemoryIndexer({ graceMs } = {}) {
+  try {
+    const args = [path.join(ROOT, "memory.mjs"), "index"];
+    if (graceMs !== undefined) args.push("--grace", String(graceMs));
+    spawn(process.execPath, args, { detached: true, stdio: "ignore", env: process.env }).unref();
+  } catch { /* indexing is best-effort */ }
 }
 
 // ─── rate-limit watchdog (interactive agent) ─────────────────────────────────
@@ -753,8 +776,11 @@ async function cmdStart(argv) {
   }
 
   patchSettings();
-  printBanner(modeArg);
-  await printLastSessionBanner();
+  if (!argv.includes("--no-banner")) {
+    printBanner(modeArg);
+    await printLastSessionBanner();
+  }
+  spawnMemoryIndexer(); // refresh session summaries in the background
 
   const claudeArgs = [...MODE_FLAGS[modeArg], ...loadDisallowedTools()];
 
@@ -814,6 +840,9 @@ async function cmdStart(argv) {
         return nimRepl();
       }
 
+      // Session over — summarize it now so recall/banner are instantly fresh
+      spawnMemoryIndexer({ graceMs: 0 });
+
       // Clean exit — user typed /exit or Ctrl+C
       if (signal === "SIGINT" || code === 0) process.exit(0);
 
@@ -829,16 +858,71 @@ async function cmdStart(argv) {
   await startClaude();
 }
 
+// ─── menu (default entry point) ──────────────────────────────────────────────
+//
+// Bare `claudbot` in a TTY shows the Claudbot menu instead of jumping straight
+// into Claude Code. `claudbot start` (or any explicit command, or a non-TTY)
+// bypasses it, so scripts and systemd are unaffected.
+
+async function cmdMenu() {
+  spawnMemoryIndexer(); // keep summaries fresh while the user reads the menu
+
+  const { showMenu, isInteractive } = await import("./menu.mjs");
+  if (!isInteractive()) return cmdStart([]);
+
+  // Last-session card for the top of the menu (cached summary if fresh)
+  let lastSession = null;
+  try {
+    const mem = await import("./memory.mjs");
+    const [last] = mem.listSessions({ limit: 1 });
+    if (last) {
+      const cached = mem.cachedSummary(last.id);
+      lastSession = {
+        topic: last.topic,
+        rel: mem.relativeTime(last.end),
+        summary: cached && cached.mtimeMs === last.mtimeMs ? cached.summary : "",
+      };
+    }
+  } catch { /* menu works without memory */ }
+
+  const mode = process.env.CLAUDBOT_DEFAULT_MODE ?? "full";
+  printBanner(mode);
+
+  for (;;) {
+    const action = await showMenu({ lastSession });
+    switch (action) {
+      case "start":     return cmdStart(["--no-banner"]);
+      case "resume":
+        await cmdRecall(["last"]);
+        return cmdStart(["--no-banner"]);
+      case "dashboard": return runScript("dashboard.mjs");
+      case "briefing":  return runScript("briefing.mjs");
+      case "dream":     return runScript("dream.mjs");
+      case "night":     return runScript("night.mjs");
+      case "update":    return cmdUpdate();
+      case "exit":
+        console.log(`  ${C.dim}Bye.${C.reset}\n`);
+        return;
+      // These return to the menu when done:
+      case "recall":    await cmdRecall([]); break;
+      case "doctor":    await cmdDoctor();   break;
+      default:          return;
+    }
+  }
+}
+
 // ─── router ──────────────────────────────────────────────────────────────────
 
 async function main() {
   loadDotEnv();
 
   const argv = process.argv.slice(2);
-  const cmd  = argv.find((a) => !a.startsWith("-")) ?? "start";
+  const explicit = argv.find((a) => !a.startsWith("-"));
+  const cmd  = explicit ?? (process.stdin.isTTY && process.stdout.isTTY ? "menu" : "start");
   const rest  = argv.filter((a) => a !== cmd);
 
   switch (cmd) {
+    case "menu":     return cmdMenu();
     case "start":    return cmdStart(rest);
     case "restart":  return cmdRestart();
     case "recall":   return cmdRecall(rest);

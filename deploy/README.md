@@ -7,14 +7,29 @@ just open `http://<vm-ip>:4500` in the morning.
 All three run under one supervisor (`claudbot night`), which restarts any that
 crash. It needs only **Node 22 + a `NIM_API_KEY`** — no Claude Code, no GUI.
 
-## 1. Create the VM
+## 0. One-time: give the API token permissions
 
-**Option A — clone a cloud-init template via the API** (set `PROXMOX_HOST` and
-`PROXMOX_API_TOKEN` in `.env` first):
+Proxmox tokens start with **no ACLs** (privilege separation). In the Proxmox
+web UI (`https://192.168.1.191:8006` → node → Shell) run once:
 
 ```bash
-node deploy/proxmox-provision.mjs --template <template-vmid> --vmid 150 \
-     --name claudbot --cores 2 --memory 2048 --start
+pveum acl modify / --tokens 'claudbot@pve!bot' --roles Administrator
+```
+
+`node deploy/proxmox-provision.mjs --check` verifies this and prints the exact
+command (with your token id) if it's still missing.
+
+## 1. Create the VM
+
+**Option A — fully automatic via the API** (set `PROXMOX_HOST` and
+`PROXMOX_API_TOKEN` in `.env` first). No template needed — the script downloads
+the Ubuntu 24.04 cloud image, builds the VM from it, configures cloud-init
+(user `claudbot`, your `~/.ssh/id_ed25519.pub`, DHCP), starts it, and prints
+its IP:
+
+```bash
+node deploy/proxmox-provision.mjs --start
+# defaults: --node nuc11 --vmid 150 --name claudbot-night --cores 2 --memory 2048
 # add --insecure only if the Proxmox cert is self-signed and the host is trusted
 ```
 
@@ -52,7 +67,7 @@ Open `http://<vm-ip>:4500`. Update later with
 |------|---------|
 | `claudbot-night.service` | systemd unit running `node night.mjs` |
 | `nuc-setup.sh` | one-shot provisioner (run as root in the VM) |
-| `proxmox-provision.mjs` | optional: clone a template into a new VM via the Proxmox API |
+| `proxmox-provision.mjs` | build the night VM from the Ubuntu cloud image via the Proxmox API (no template needed) |
 
 ## Reusing for TradeAlgo
 
