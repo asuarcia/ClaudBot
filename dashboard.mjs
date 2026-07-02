@@ -201,6 +201,14 @@ app.get("/", async (_req, res) => {
 app.get("/api/briefing", (_req, res) => res.json(loadBriefing() ?? { items: [] }));
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
+// Raw dream log — consumed by night-sync.mjs on the PC to merge the VM's
+// overnight dreams into the local dream-log.md.
+app.get("/api/dream-log", (_req, res) => {
+  res.type("text/plain; charset=utf-8");
+  try { res.send(existsSync(DREAM_LOG) ? readFileSync(DREAM_LOG, "utf8") : ""); }
+  catch { res.send(""); }
+});
+
 const argv = process.argv.slice(2);
 const portIdx = argv.indexOf("--port");
 const PORT = portIdx !== -1 ? Number(argv[portIdx + 1]) : Number(process.env.DASHBOARD_PORT ?? 4500);

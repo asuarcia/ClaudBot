@@ -400,6 +400,16 @@ function spawnMemoryIndexer({ graceMs } = {}) {
   } catch { /* indexing is best-effort */ }
 }
 
+// Fire-and-forget pull of the night VM's dream log into the local one
+// (no-op unless CLAUDBOT_NIGHT_URL is set — see night-sync.mjs).
+function spawnNightSync() {
+  try {
+    spawn(process.execPath, [path.join(ROOT, "night-sync.mjs")], {
+      detached: true, stdio: "ignore", env: process.env,
+    }).unref();
+  } catch { /* sync is best-effort */ }
+}
+
 // ─── rate-limit watchdog (interactive agent) ─────────────────────────────────
 //
 // The interactive agent runs Claude Code as a full TUI with stdio:"inherit", so
@@ -781,6 +791,7 @@ async function cmdStart(argv) {
     await printLastSessionBanner();
   }
   spawnMemoryIndexer(); // refresh session summaries in the background
+  spawnNightSync();     // pull overnight dreams from the NUC, if configured
 
   const claudeArgs = [...MODE_FLAGS[modeArg], ...loadDisallowedTools()];
 
@@ -866,6 +877,7 @@ async function cmdStart(argv) {
 
 async function cmdMenu() {
   spawnMemoryIndexer(); // keep summaries fresh while the user reads the menu
+  spawnNightSync();     // pull overnight dreams from the NUC, if configured
 
   const { showMenu, isInteractive } = await import("./menu.mjs");
   if (!isInteractive()) return cmdStart([]);
