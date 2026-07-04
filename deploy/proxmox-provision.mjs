@@ -96,16 +96,41 @@ async function pollTask(upid, label) {
 async function checkPermissions() {
   const { data } = await api("GET", "/access/permissions");
   const paths = Object.keys(data ?? {});
-  const ok = paths.length > 0 &&
-    paths.some((p) => Object.keys(data[p] ?? {}).some((priv) => priv.startsWith("VM.") || priv === "Datastore.AllocateSpace"));
-  if (ok) return true;
+
+  // A privilege only counts if it's granted on a path that actually COVERS the
+  // resource. Storage privileges nested under /vms don't let the token list or
+  // allocate on /storage — so we must check storage rights on / or /storage*,
+  // and VM rights on / or /vms*. (A prior version accepted Datastore.* anywhere,
+  // which false-passed a token scoped only to /vms and failed mid-provision.)
+  const privsOn = (pred) => {
+    const out = new Set();
+    for (const p of paths) {
+      if (!pred(p)) continue;
+      for (const priv of Object.keys(data[p] ?? {})) if (data[p][priv]) out.add(priv);
+    }
+    return out;
+  };
+  const storagePaths = (p) => p === "/" || p === "/storage" || p.startsWith("/storage/");
+  const vmPaths = (p) => p === "/" || p === "/vms" || p.startsWith("/vms/");
+
+  const storagePrivs = privsOn(storagePaths);
+  const vmPrivs = privsOn(vmPaths);
+  const hasStorage = ["Datastore.Allocate", "Datastore.AllocateSpace"].some((x) => storagePrivs.has(x));
+  const hasVM = vmPrivs.has("VM.Allocate");
+  if (hasStorage && hasVM) return true;
 
   const tokenId = TOKEN.split("=")[0]; // USER@REALM!TOKENID
+  const missing = [
+    !hasStorage && "storage (Datastore.Allocate on / or /storage)",
+    !hasVM && "VM creation (VM.Allocate on / or /vms)",
+  ].filter(Boolean).join(" and ");
   console.error(`
-✗  The API token authenticates but has NO permissions (empty ACL).
-   Proxmox tokens are created with "privilege separation" — they get no access
-   until you grant them a role. One-time fix, in the Proxmox host shell
-   (Datacenter → nuc11 → Shell in the web UI at https://${HOST}:8006):
+✗  The API token authenticates but is missing ${missing}.
+   Proxmox tokens are created with "privilege separation" and are scoped to the
+   exact path you grant. A grant on /vms alone gives VM rights but NO storage
+   access, so the provisioner can't see any storage. Grant at the ROOT instead —
+   one command in the Proxmox host shell (Datacenter → nuc11 → Shell in the web
+   UI at https://${HOST}:8006):
 
      pveum acl modify / --tokens '${tokenId}' --roles Administrator
 
@@ -175,6 +200,11 @@ async function main() {
     vga: "serial0",
     agent: "1",
     ostype: "l26",
+    // Auto-start this VM whenever the Proxmox host boots, so a NUC power-cycle
+    // brings the night services back with no hands. up=30 gives the network a
+    // moment before the guest starts.
+    onboot: "1",
+    startup: "order=1,up=30",
   });
   await pollTask(createUpid, "VM create");
   console.log("\n   ✓ VM created");

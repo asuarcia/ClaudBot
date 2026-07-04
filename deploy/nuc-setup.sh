@@ -13,12 +13,16 @@ APP_DIR=/opt/claudbot
 REPO=${CLAUDBOT_REPO:-https://github.com/asuarcia/ClaudBot.git}
 SERVICE=claudbot-night
 
-echo "==> Installing Node.js 22 + git"
+echo "==> Installing Node.js 22 + git + qemu-guest-agent"
 if ! command -v node >/dev/null || [ "$(node -v | cut -dv -f2 | cut -d. -f1)" -lt 22 ]; then
   curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
   apt-get install -y nodejs
 fi
 apt-get install -y git
+# qemu-guest-agent lets Proxmox read the VM's IP and shut it down cleanly, so the
+# whole pipeline is hands-off (the provisioner waits on the agent for the IP).
+apt-get install -y qemu-guest-agent
+systemctl enable --now qemu-guest-agent || true
 
 echo "==> Creating service user + cloning to $APP_DIR"
 id claudbot &>/dev/null || useradd -r -m -d "$APP_DIR" -s /usr/sbin/nologin claudbot

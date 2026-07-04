@@ -1,10 +1,13 @@
 #!/usr/bin/env node
-// night-sync.mjs — pull the NUC night VM's dream log into the local one.
+// night-sync.mjs — pull the NUC night VM's dream log + news digest to the PC.
 //
 // The VM appends to its own dream-log.md around the clock and serves it raw at
-// GET {CLAUDBOT_NIGHT_URL}/api/dream-log. This script (spawned detached by the
-// claudbot launcher, silent by default) appends only the new remote content to
-// the local .claudbot/dream-log.md, so PC + VM dreams live in one file.
+// GET {CLAUDBOT_NIGHT_URL}/api/dream-log; it also serves the news it scavenged
+// overnight as JSON at GET {CLAUDBOT_NIGHT_URL}/api/briefing. This script
+// (spawned detached by the claudbot launcher, silent by default) appends only
+// the new remote dream content to the local .claudbot/dream-log.md, and mirrors
+// the latest briefing to .claudbot/briefing.nuc.json — so PC + VM dreams live in
+// one file and Claudbot can see the news the VM found.
 //
 // Written by the `coder` sub-agent; integrated by Claudbot.
 
@@ -16,6 +19,7 @@ const ROOT = dirname(fileURLToPath(import.meta.url));
 const LOCAL_LOG = join(ROOT, ".claudbot", "dream-log.md");
 const STATE_FILE = join(ROOT, ".claudbot", ".night-sync.json");
 const MIRROR = join(ROOT, ".claudbot", "dream-log.nuc.md");
+const BRIEFING_MIRROR = join(ROOT, ".claudbot", "briefing.nuc.json");
 const VERBOSE = process.argv.includes("--verbose");
 
 // Load .env from ROOT (don't override existing env)
@@ -111,4 +115,52 @@ async function main() {
   );
 
   if (VERBOSE) console.log(resultMsg);
+
+  // Also pull the news the VM scavenged overnight (best-effort, independent).
+  await syncBriefing();
+}
+
+// Mirror the VM's news digest to .claudbot/briefing.nuc.json, write-if-changed.
+async function syncBriefing() {
+  const url = `${baseUrl.replace(/\/$/, "")}/api/briefing`;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 8000);
+
+  let res;
+  try {
+    res = await fetch(url, { signal: ctrl.signal });
+  } catch {
+    if (VERBOSE) console.log("briefing fetch failed (VM may be off)");
+    return;
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (res.status !== 200) {
+    if (VERBOSE) console.log(`briefing non-200 status: ${res.status}`);
+    return;
+  }
+
+  let json;
+  try {
+    json = await res.json();
+  } catch {
+    if (VERBOSE) console.log("briefing not valid JSON — skipping");
+    return;
+  }
+
+  const pretty = JSON.stringify(json, null, 2);
+  let existing = null;
+  try {
+    if (existsSync(BRIEFING_MIRROR)) existing = readFileSync(BRIEFING_MIRROR, "utf8");
+  } catch { /* unreadable → overwrite */ }
+
+  if (existing === pretty) {
+    if (VERBOSE) console.log("briefing up to date");
+    return;
+  }
+
+  mkdirSync(join(ROOT, ".claudbot"), { recursive: true });
+  writeFileSync(BRIEFING_MIRROR, pretty, "utf8");
+  if (VERBOSE) console.log(`briefing mirrored (${pretty.length} chars)`);
 }
