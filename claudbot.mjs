@@ -100,6 +100,32 @@ function runScript(scriptFile, extraArgs = []) {
   process.exit(result.status ?? 0);
 }
 
+// Open a URL in the default browser (best-effort, cross-platform).
+function openBrowser(url) {
+  try {
+    const [cmd, args] = process.platform === "win32" ? ["cmd", ["/c", "start", "", url]]
+      : process.platform === "darwin" ? ["open", [url]]
+      : ["xdg-open", [url]];
+    spawn(cmd, args, { detached: true, stdio: "ignore" }).unref();
+  } catch { /* the URL is printed by the server anyway */ }
+}
+
+// Serve the organizer and pop it open once it's listening. Runs the server
+// async (not spawnSync) so the readiness poll can fire while it's up.
+function cmdOrganizer(rest = []) {
+  const portIdx = rest.indexOf("--port");
+  const port = portIdx !== -1 ? rest[portIdx + 1] : (process.env.ORGANIZER_PORT ?? "4700");
+  const url = `http://localhost:${port}`;
+  const child = spawn("node", [path.join(ROOT, "organizer.mjs"), ...rest], { stdio: "inherit", env: process.env });
+  (async () => {
+    for (let i = 0; i < 40; i++) {
+      await new Promise((r) => setTimeout(r, 300));
+      try { if ((await fetch(`${url}/health`)).ok) return openBrowser(url); } catch { /* not up yet */ }
+    }
+  })();
+  child.on("exit", (code) => process.exit(code ?? 0));
+}
+
 // ─── banner ──────────────────────────────────────────────────────────────────
 
 const C = {
@@ -157,6 +183,7 @@ function cmdHelp() {
     briefing           Build the morning news-to-learn digest once
     briefing --watch   Rebuild the digest on a schedule
     dashboard          Serve the morning command center (http://localhost:4500)
+    organizer          Open your assistant home — tasks, calendar & news (http://localhost:4700)
     night              Run all idle processes together (dream + briefing + dashboard)
     onboard            Run the interactive setup wizard
     update             Pull latest code from GitHub + reinstall deps
@@ -907,6 +934,7 @@ async function cmdMenu() {
       case "resume":
         await cmdRecall(["last"]);
         return cmdStart(["--no-banner"]);
+      case "organizer": return cmdOrganizer();
       case "dashboard": return runScript("dashboard.mjs");
       case "briefing":  return runScript("briefing.mjs");
       case "dream":     return runScript("dream.mjs");
@@ -942,6 +970,7 @@ async function main() {
     case "dream":    return runScript("dream.mjs", rest);
     case "briefing": return runScript("briefing.mjs", rest);
     case "dashboard":return runScript("dashboard.mjs", rest);
+    case "organizer":return cmdOrganizer(rest);
     case "night":    return runScript("night.mjs", rest);
     case "onboard":  return runScript("scripts/onboard.mjs", rest);
     case "update":   return cmdUpdate();

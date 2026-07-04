@@ -20,6 +20,10 @@ NemoClaw-main/
 .claudbot/dream-log.md
 .claudbot/channel-log.md
 .claudbot/conversation-index.json
+.claudbot/organizer.json
+.claudbot/briefing.nuc.json
+.claudbot/dream-log.nuc.md
+.claudbot/.night-sync.json
 .claudbot/.pid
 .claudbot/.restart
 

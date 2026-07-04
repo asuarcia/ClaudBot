@@ -31,6 +31,7 @@ const stripAnsi = (s) => s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
 
 const MENU_ITEMS = [
   { label: "▶ Start Claudbot",       desc: "launch the Claude Code agent",               action: "start" },
+  { label: "🗓 Organizer",           desc: "your day: tasks, calendar & overnight news", action: "organizer" },
   { label: "↻ Resume last session",  desc: "summarize where you left off, then start",   action: "resume" },
   { label: "🔍 Recall",              desc: "browse & search past sessions",              action: "recall" },
   { label: "📊 Dashboard",           desc: "morning command center on :4500",            action: "dashboard" },
@@ -51,7 +52,9 @@ function truncate(str, max) {
 
 function renderRow(index, selected, termWidth) {
   const item = MENU_ITEMS[index];
-  const num = index === 9 ? "0" : String(index + 1);
+  // 1–9 for the first nine items, 0 for the last (exit); anything between is
+  // reachable by arrows only. Keeps the menu length-agnostic as items are added.
+  const num = index === MENU_ITEMS.length - 1 ? "0" : index < 9 ? String(index + 1) : "·";
   const prefix = selected ? `${A.CYAN}${A.BOLD}❯ ` : `${A.DIM}  `;
   const labelColor = selected ? `${A.RESET}${A.BOLD}${A.WHITE}` : `${A.RESET}`;
   // budget: 2 prefix + label + " <num>" + "  " + desc
@@ -79,8 +82,8 @@ function renderLastSession(ls, termWidth) {
 
 /**
  * Render the Claudbot menu and resolve with the chosen action string:
- * start | resume | recall | dashboard | briefing | dream | night |
- * doctor | update | exit
+ * start | organizer | resume | recall | dashboard | briefing | dream |
+ * night | doctor | update | exit
  */
 export async function showMenu({ lastSession } = {}) {
   if (!isInteractive()) return "start";
@@ -139,7 +142,7 @@ export async function showMenu({ lastSession } = {}) {
           return finish(MENU_ITEMS[selected].action);
         }
         if (/^[1-9]$/.test(seq)) return finish(MENU_ITEMS[Number(seq) - 1].action);
-        if (seq === "0") return finish(MENU_ITEMS[9].action);
+        if (seq === "0") return finish(MENU_ITEMS[MENU_ITEMS.length - 1].action);
         if (name === "up" || seq === "k") {
           selected = (selected - 1 + MENU_ITEMS.length) % MENU_ITEMS.length;
           return redraw();
