@@ -22,6 +22,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync, appendFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveAgent, agentApiKey } from "./providers/agents.mjs";
 
 // ─── paths ───────────────────────────────────────────────────────────────────
 
@@ -83,9 +84,13 @@ function loadSystemPrompt() {
 
 // ─── NIM provider (inline, no circular import) ───────────────────────────────
 
-const NIM_BASE = (process.env.NIM_BASE_URL ?? "https://integrate.api.nvidia.com/v1").replace(/\/$/, "");
-const NIM_KEY  = process.env.NIM_API_KEY ?? "";
-const NIM_MODEL= process.env.NIM_MODEL   ?? "meta/llama-3.1-70b-instruct";
+// Model resolved by agent name from agents.yaml (like the fallback REPL and the
+// dream loop since the 2026-06-30 agent split) — no more hardcoded stale model.
+// Override with CLAUDBOT_CHANNEL_AGENT; env NIM_* remain the last-resort fallback.
+const CHANNEL_AGENT = resolveAgent("CLAUDBOT_CHANNEL_AGENT", "agent");
+const NIM_BASE = (CHANNEL_AGENT?.endpoint ?? process.env.NIM_BASE_URL ?? "https://integrate.api.nvidia.com/v1").replace(/\/$/, "");
+const NIM_KEY  = (CHANNEL_AGENT ? agentApiKey(CHANNEL_AGENT) : undefined) ?? process.env.NIM_API_KEY ?? "";
+const NIM_MODEL= CHANNEL_AGENT?.model ?? process.env.NIM_MODEL ?? "meta/llama-3.1-70b-instruct";
 
 async function nimChat(messages) {
   if (!NIM_KEY) throw new Error("NIM_API_KEY not set");
