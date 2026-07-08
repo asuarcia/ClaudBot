@@ -11,7 +11,7 @@
  *   node dream.mjs --task memory # run a specific task by name
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync, statSync } from "node:fs";
 import { parse as yamlParse, stringify as yamlStringify } from "yaml";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -143,23 +143,62 @@ function loadTasks() {
 
 // ─── logging ─────────────────────────────────────────────────────────────────
 
+// Keep the live log bounded: past ~256KB, move everything but the newest
+// ~96KB (split on an entry boundary) into dream-log.archive.md.
+function rotateLog(file, maxBytes = 256 * 1024, keepBytes = 96 * 1024) {
+  try {
+    if (!existsSync(file) || statSync(file).size <= maxBytes) return;
+    const text = readFileSync(file, "utf8");
+    const cut = text.indexOf("\n## [", Math.max(0, text.length - keepBytes));
+    if (cut <= 0) return;
+    appendFileSync(file.replace(/\.md$/, "") + ".archive.md", text.slice(0, cut));
+    writeFileSync(file, text.slice(cut));
+  } catch { /* rotation is best-effort */ }
+}
+
 function logDream(taskName, content) {
   const ts = new Date().toISOString();
   const entry = `\n## [${ts}] ${taskName}\n\n${content}\n\n---\n`;
   try {
     mkdirSync(path.dirname(DREAM_LOG), { recursive: true });
     appendFileSync(DREAM_LOG, entry);
+    rotateLog(DREAM_LOG);
   } catch { /* non-fatal */ }
 }
 
 // ─── run a single task ───────────────────────────────────────────────────────
+
+// Real context for the dream prompts: the newest cached session summaries from
+// conversation-index.json. Without this the model has nothing to reflect on and
+// generates generic filler. Empty string (→ unchanged prompt) where the index
+// doesn't exist, e.g. on the night VM.
+function recentWorkContext(maxChars = 2400) {
+  try {
+    const index = JSON.parse(readFileSync(path.join(CLAUDBOT_ROOT, "conversation-index.json"), "utf8"));
+    const entries = Object.values(index)
+      .filter((e) => e?.summary)
+      .sort((a, b) => (b.mtimeMs ?? 0) - (a.mtimeMs ?? 0))
+      .slice(0, 5);
+    let out = "";
+    for (const e of entries) {
+      const block = `### ${e.topic ?? "session"}\n${e.summary}\n`;
+      if (out.length + block.length > maxChars) break;
+      out += block;
+    }
+    return out;
+  } catch { return ""; }
+}
 
 async function runTask(task) {
   const start = Date.now();
   console.log(`\n[dream] Running: ${task.name} — ${task.description}`);
 
   try {
-    const result = await nimComplete(task.systemPrompt, task.prompt, modelForTask(task));
+    const ctx = recentWorkContext();
+    const prompt = ctx
+      ? `${task.prompt}\n\n## Recent session summaries (ground your output in these — do not invent work that isn't here)\n${ctx}`
+      : task.prompt;
+    const result = await nimComplete(task.systemPrompt, prompt, modelForTask(task));
     const elapsed = ((Date.now() - start) / 1000).toFixed(1);
 
     console.log(`[dream] ✓ ${task.name} completed in ${elapsed}s`);

@@ -18,6 +18,7 @@ NemoClaw-main/
 .claudbot/.mcp.json
 .claudbot/channels.yaml
 .claudbot/dream-log.md
+.claudbot/dream-log.archive.md
 .claudbot/channel-log.md
 .claudbot/conversation-index.json
 .claudbot/organizer.json

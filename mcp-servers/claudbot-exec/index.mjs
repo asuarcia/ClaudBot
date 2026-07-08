@@ -61,7 +61,38 @@ function findAgent(name) {
   return agent;
 }
 
-const REQUEST_TIMEOUT_MS = 120_000; // 2 min — don't hang Claude forever
+// 120s proved too short for the bigger NIM models (researcher/longcontext, and
+// coder/fast under load all exceed it); overridable per install.
+const envTimeout = Number(process.env.CLAUDBOT_AGENT_TIMEOUT_MS);
+const REQUEST_TIMEOUT_MS = Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : 300_000;
+
+// Completion cap sent to the endpoint: per-agent `maxTokens` in agents.yaml,
+// else CLAUDBOT_AGENT_MAX_TOKENS, else 4096.
+function agentMaxTokens(agent) {
+  for (const v of [agent?.maxTokens, process.env.CLAUDBOT_AGENT_MAX_TOKENS]) {
+    const n = Number(v);
+    if (Number.isFinite(n) && n > 0) return Math.floor(n);
+  }
+  return 4096;
+}
+
+function agentMaxOutputChars() {
+  const n = Number(process.env.CLAUDBOT_AGENT_MAX_OUTPUT);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 24_000;
+}
+
+// Reasoning models (Nemotron reasoning, Kimi) emit <think> traces that can
+// dwarf the actual answer; never forward them into the caller's context.
+function sanitizeAgentOutput(text, maxChars) {
+  let s = typeof text === "string" ? text : "";
+  s = s.replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, "");
+  s = s.replace(/<think(?:ing)?>[\s\S]*$/i, ""); // unclosed trace
+  const lastClose = s.toLowerCase().lastIndexOf("</think");
+  if (lastClose !== -1) s = s.slice(s.indexOf(">", lastClose) + 1); // orphaned close tag
+  s = s.trim();
+  if (s.length > maxChars) s = s.slice(0, maxChars) + `\n\n[output truncated at ${maxChars} chars]`;
+  return s;
+}
 
 async function callAgent(agent, prompt, systemPrompt) {
   if (!agent.endpoint || typeof agent.endpoint !== "string") {
@@ -97,7 +128,7 @@ async function callAgent(agent, prompt, systemPrompt) {
     res = await fetch(url, {
       method: "POST",
       headers,
-      body: JSON.stringify({ model: agent.model, messages }),
+      body: JSON.stringify({ model: agent.model, messages, max_tokens: agentMaxTokens(agent) }),
       signal: controller.signal,
     });
   } catch (err) {
@@ -119,7 +150,11 @@ async function callAgent(agent, prompt, systemPrompt) {
   if (!content) {
     throw new Error(`Agent "${agent.name}" returned an empty response.`);
   }
-  return content;
+  const maxChars = agentMaxOutputChars();
+  const clean = sanitizeAgentOutput(content, maxChars);
+  // If the model put its entire answer inside a think block, the raw text is
+  // better than nothing.
+  return clean || sanitizeAgentOutput(content.replace(/<\/?think(?:ing)?>/gi, ""), maxChars);
 }
 
 // ---------------------------------------------------------------------------

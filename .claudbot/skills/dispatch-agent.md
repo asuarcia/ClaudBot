@@ -36,7 +36,9 @@ plans → `coder` implements → `fast` writes the summary).
 
 ## Protocol
 
-1. **Know the roster.** Call `list_agents()` once per session.
+1. **Know the roster.** Call `list_agents()` once before your first delegation
+   each session — not at greeting, so sessions with no delegation don't pay for
+   the roster dump.
 
 2. **Craft a focused, self-contained prompt.** Each call is stateless — the
    sub-agent has zero conversation history. Paste in all the code, context, and
@@ -56,6 +58,11 @@ plans → `coder` implements → `fast` writes the summary).
 ## Notes
 
 - Sub-agent calls are **stateless** — fresh context window every time.
+- Replies are sanitized: reasoning-model `<think>` traces are stripped and the
+  text is capped at ~24k chars (`CLAUDBOT_AGENT_MAX_OUTPUT`). Completions are
+  capped at 4096 tokens (`maxTokens` per agent in agents.yaml, or
+  `CLAUDBOT_AGENT_MAX_TOKENS`). Calls time out after 300s
+  (`CLAUDBOT_AGENT_TIMEOUT_MS`).
 - If an agent errors (endpoint down, key missing, bad model ID), tell the user
   clearly, then either retry via a different agent or fall back to doing it
   yourself — never silently stall.

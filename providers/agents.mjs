@@ -66,6 +66,39 @@ export function describeAgents() {
     .join("\n");
 }
 
+// Completion cap sent to the endpoint: per-agent `maxTokens` in agents.yaml,
+// else CLAUDBOT_AGENT_MAX_TOKENS, else 4096.
+export function agentMaxTokens(agent) {
+  for (const v of [agent?.maxTokens, process.env.CLAUDBOT_AGENT_MAX_TOKENS]) {
+    const n = Number(v);
+    if (Number.isFinite(n) && n > 0) return Math.floor(n);
+  }
+  return 4096;
+}
+
+function agentMaxOutputChars() {
+  const n = Number(process.env.CLAUDBOT_AGENT_MAX_OUTPUT);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 24_000;
+}
+
+function agentTimeoutMs() {
+  const n = Number(process.env.CLAUDBOT_AGENT_TIMEOUT_MS);
+  return Number.isFinite(n) && n > 0 ? n : 300_000;
+}
+
+// Reasoning models (Nemotron reasoning, Kimi) emit <think> traces that can
+// dwarf the actual answer; never forward them to callers.
+export function sanitizeAgentOutput(text, maxChars = agentMaxOutputChars()) {
+  let s = typeof text === "string" ? text : "";
+  s = s.replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, "");
+  s = s.replace(/<think(?:ing)?>[\s\S]*$/i, ""); // unclosed trace
+  const lastClose = s.toLowerCase().lastIndexOf("</think");
+  if (lastClose !== -1) s = s.slice(s.indexOf(">", lastClose) + 1); // orphaned close tag
+  s = s.trim();
+  if (s.length > maxChars) s = s.slice(0, maxChars) + `\n\n[output truncated at ${maxChars} chars]`;
+  return s;
+}
+
 export async function runAgent(name, prompt, systemPrompt) {
   const agent = findAgent(name);
 
@@ -83,14 +116,27 @@ export async function runAgent(name, prompt, systemPrompt) {
   if (system) messages.push({ role: "system", content: system });
   messages.push({ role: "user", content: prompt });
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({ model: agent.model, messages }),
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), agentTimeoutMs());
+  let res;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({ model: agent.model, messages, max_tokens: agentMaxTokens(agent) }),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (err.name === "AbortError") {
+      throw new Error(`Agent "${name}" timed out after ${agentTimeoutMs() / 1000}s.`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 
   if (!res.ok) {
     const body = await res.text().catch(() => "(no body)");
@@ -100,5 +146,6 @@ export async function runAgent(name, prompt, systemPrompt) {
   const data = await res.json();
   const content = data?.choices?.[0]?.message?.content;
   if (!content) throw new Error(`Agent "${name}" returned an empty response.`);
-  return content;
+  const clean = sanitizeAgentOutput(content);
+  return clean || sanitizeAgentOutput(content.replace(/<\/?think(?:ing)?>/gi, ""));
 }

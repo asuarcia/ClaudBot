@@ -224,7 +224,7 @@ export async function summarizeSession(session, { runAgent, agentName } = {}) {
   if (runAgent && agentName) {
     try {
       const transcript =
-        `Topic (first message): ${session.firstUser}\n\n` +
+        `Topic (first message): ${firstLine(session.firstUser, 400)}\n\n` +
         `Most recent user request:\n${firstLine(session.lastUser, 600)}\n\n` +
         `Most recent assistant reply:\n${firstLine(session.lastAssistant, 800)}`;
       const summary = await runAgent(
