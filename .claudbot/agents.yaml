@@ -60,6 +60,18 @@ agents:
       workflows, multi-tool task plans, scripting that requires dynamic
       decision-making, and agentic coding tasks that mix reasoning with code.
 
+  - name: vision
+    model: nvidia/nemotron-nano-12b-v2-vl
+    endpoint: https://integrate.api.nvidia.com/v1
+    apiKeyEnv: NIM_API_KEY
+    jobDescription: >
+      Looking at images (Nemotron Nano 12B v2 VL). Best for: describing
+      screenshots, reading text off an image, document intelligence, and visual
+      Q&A. This is what `claudbot screen` uses to describe captures — small and
+      cheap on purpose, because it runs on a background heartbeat and must never
+      touch the Claude plan. Call it with an image; it has no memory of prior
+      calls.
+
   - name: longcontext
     model: deepseek-ai/deepseek-v4-flash
     endpoint: https://integrate.api.nvidia.com/v1

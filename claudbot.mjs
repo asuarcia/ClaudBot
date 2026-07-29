@@ -170,7 +170,24 @@ function printBanner(mode) {
     `fallback ${C.dim}NIM${C.reset}  ${C.dim}│${C.reset}  ` +
     `agents ${C.dim}claudbot-exec${C.reset}`
   );
+  printScreenIndicator();
   console.log(`  ${C.dim}${"─".repeat(60)}${C.reset}\n`);
+}
+
+// Screen capture must never be invisible. If the watcher is live, say so on
+// every launch — not just in `screen status`.
+function printScreenIndicator() {
+  try {
+    const state = JSON.parse(
+      readFileSync(path.join(CLAUDBOT_ROOT, "screen", "state.json"), "utf8"),
+    );
+    if (!state.enabled) return;
+    console.log(
+      `  ${C.bold}\x1b[31m●${C.reset} ${C.bold}SCREEN AWARENESS IS ON${C.reset}  ` +
+      `${C.dim}│${C.reset}  your screen is being captured  ${C.dim}│${C.reset}  ` +
+      `${C.dim}claudbot screen off${C.reset}`,
+    );
+  } catch { /* off, or never used */ }
 }
 
 // ─── commands ────────────────────────────────────────────────────────────────
