@@ -217,7 +217,9 @@ function cmdHelp() {
     voice train        Train the bilingual "Hey Aitor" wake word
     screen on|off      Let Claude see your screen (off by default)
     screen now         Capture and describe the screen right now
-    project <path>     Open a project-scoped chat that remembers that repo
+    project            Pick a project chat (remembers that repo)
+    project <path>     Open a project-scoped chat for that repo
+    project list       List every project chat
     night              Run all idle processes together (dream + briefing + dashboard)
     onboard            Run the interactive setup wizard
     update             Pull latest code from GitHub + reinstall deps
@@ -833,7 +835,7 @@ function cmdRestart() {
 
 // ─── start command ───────────────────────────────────────────────────────────
 
-async function cmdStart(argv) {
+async function cmdStart(argv, { project = null } = {}) {
   if (!existsSync(path.join(CLAUDBOT_ROOT, "CLAUDE.md"))) {
     console.error("[claudbot] Not set up yet. Run: claudbot onboard");
     process.exit(1);
@@ -849,12 +851,26 @@ async function cmdStart(argv) {
   patchSettings();
   if (!argv.includes("--no-banner")) {
     printBanner(modeArg);
-    await printLastSessionBanner();
+    // The main chat is deliberately a clean slate — no project context, no past
+    // transcripts. `claudbot project <repo>` is where memory lives, and the
+    // banner is opt-in via the menu's "Resume last session".
+    if (argv.includes("--with-last-session")) await printLastSessionBanner();
   }
-  spawnMemoryIndexer(); // refresh session summaries in the background
+  spawnMemoryIndexer(); // keep summaries fresh on disk (not loaded into this chat)
   spawnNightSync();     // pull overnight dreams from the NUC, if configured
 
+  if (!project && !argv.includes("--no-scratchpad-note")) {
+    console.log(
+      `  ${C.dim}Main chat — clean slate, no memory. ` +
+      `${C.reset}${C.cyan}claudbot project <repo>${C.reset}${C.dim} for a chat that remembers.${C.reset}\n`,
+    );
+  }
+
   const claudeArgs = [...MODE_FLAGS[modeArg], ...loadDisallowedTools()];
+  // A project chat runs IN the repo (so Claude sees its files and its own
+  // CLAUDE.md) and carries that project's rolling memory in the system prompt.
+  const cwd = project ? project.dir : CLAUDBOT_ROOT;
+  if (project) claudeArgs.push("--append-system-prompt", project.context);
 
   // Whether a NIM fallback is even possible — without a key, killing a working
   // Claude session to drop into a dead REPL would be worse than the limit itself.
@@ -863,7 +879,7 @@ async function cmdStart(argv) {
   // Spawn Claude and keep restarting whenever the restart flag is set
   const startClaude = async () => {
     const claude = spawn("claude", claudeArgs, {
-      cwd: CLAUDBOT_ROOT,
+      cwd,
       stdio: "inherit",
       env: process.env,
     });
@@ -876,7 +892,7 @@ async function cmdStart(argv) {
     // armed when NIM is actually configured.
     let rateLimited = false;
     const stopWatch = nimAvailable
-      ? watchForRateLimit(CLAUDBOT_ROOT, Date.now(), () => {
+      ? watchForRateLimit(cwd, Date.now(), () => {
           if (rateLimited) return;
           rateLimited = true;
           console.log(`\n[claudbot] Claude Code usage limit reached — switching to NIM fallback…`);
@@ -930,6 +946,108 @@ async function cmdStart(argv) {
   await startClaude();
 }
 
+// ─── project chats ───────────────────────────────────────────────────────────
+//
+// `claudbot` bare is one main chat with no memory — a clean scratchpad.
+// `claudbot project <repo>` opens a chat scoped to that repo which remembers
+// every past session there. The memory is a small rolling file, refreshed
+// incrementally by the `fast` NIM agent; past transcripts are never re-read.
+
+async function pickProject(pm) {
+  const known = pm.listProjects();
+  if (known.length === 0) {
+    console.log(
+      `\n  No project chats yet.\n\n` +
+      `  ${C.cyan}claudbot project <path-to-repo>${C.reset}${C.dim} to start one.${C.reset}\n`,
+    );
+    return null;
+  }
+
+  console.log(`\n  ${C.bold}Project chats${C.reset} ${C.dim}(most recent first)${C.reset}\n`);
+  known.forEach((p, i) => {
+    const when = p.lastOpened ? new Date(p.lastOpened).toISOString().slice(0, 10) : "never";
+    console.log(`  ${C.green}${i + 1}${C.reset}  ${C.white}${p.name}${C.reset}  ${C.dim}${when} · ${p.dir}${C.reset}`);
+  });
+
+  const { createInterface } = await import("node:readline/promises");
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  let answer = "";
+  try {
+    answer = (await rl.question(`\n  Which one? ${C.dim}(number, name, or path)${C.reset} `)).trim();
+  } finally {
+    rl.close();
+  }
+  if (!answer) return null;
+
+  const index = Number(answer);
+  if (Number.isInteger(index) && index >= 1 && index <= known.length) {
+    const chosen = known[index - 1];
+    return { dir: chosen.dir, name: chosen.name, slug: chosen.slug };
+  }
+  return pm.resolveProject(answer);
+}
+
+async function cmdProject(rest = []) {
+  const pm = await import("./project-memory.mjs");
+  const requested = rest.filter((a) => !a.startsWith("-")).join(" ").trim();
+
+  if (requested === "list") {
+    const known = pm.listProjects();
+    if (known.length === 0) { console.log("\n  No project chats yet.\n"); return; }
+    console.log(`\n  ${C.bold}Project chats${C.reset}\n`);
+    for (const p of known) console.log(`  ${C.white}${p.name.padEnd(20)}${C.reset}${C.dim}${p.dir}${C.reset}`);
+    console.log();
+    return;
+  }
+
+  const project = requested ? pm.resolveProject(requested) : await pickProject(pm);
+  if (!project) {
+    if (requested) {
+      console.error(
+        `\n  ${C.red}Could not find a project called "${requested}".${C.reset}\n` +
+        `  ${C.dim}Give a path: ${C.reset}${C.cyan}claudbot project C:\\Repo\\MyThing${C.reset}\n`,
+      );
+      process.exit(1);
+    }
+    return;
+  }
+
+  printBanner(process.env.CLAUDBOT_DEFAULT_MODE ?? "full");
+  console.log(
+    `  ${C.bold}${C.cyan}${project.name}${C.reset}  ${C.dim}${project.dir}${C.reset}\n` +
+    `  ${C.dim}Project chat — remembers every past session here.${C.reset}`,
+  );
+
+  // Fold in anything that happened since the last time this project was opened.
+  // Only new sessions are summarized, so this stays fast however long the
+  // history gets.
+  process.stdout.write(`  ${C.dim}refreshing memory…${C.reset}\r`);
+  const result = await pm.refreshMemory(project);
+  process.stdout.write("\x1b[K");
+  if (result.merged > 0) {
+    console.log(
+      `  ${C.dim}memory updated from ${result.merged} new session(s)` +
+      `${result.skipped ? `, ${result.skipped} older one(s) left out` : ""}.${C.reset}`,
+    );
+  } else if (result.reason && result.reason !== "nothing new") {
+    console.log(`  ${C.yellow}memory not refreshed: ${result.reason}${C.reset}`);
+  }
+
+  const memory = pm.readMemory(project.slug).trim();
+  if (memory) {
+    console.log();
+    for (const line of memory.split("\n").slice(0, 12)) {
+      console.log(`  ${C.dim}${line}${C.reset}`);
+    }
+  }
+  console.log();
+
+  pm.markOpened(project);
+  return cmdStart(["--no-banner"], {
+    project: { ...project, context: pm.contextBlock(project) },
+  });
+}
+
 // ─── menu (default entry point) ──────────────────────────────────────────────
 //
 // Bare `claudbot` in a TTY shows the Claudbot menu instead of jumping straight
@@ -969,7 +1087,7 @@ async function cmdMenu() {
       case "voice":     return runScript("voice.mjs");
       case "resume":
         await cmdRecall(["last"]);
-        return cmdStart(["--no-banner"]);
+        return cmdStart(["--no-banner", "--no-scratchpad-note"]);
       case "organizer": return cmdOrganizer();
       case "dashboard": return runScript("dashboard.mjs");
       case "briefing":  return runScript("briefing.mjs");

@@ -141,8 +141,10 @@ function parseSession(file) {
  * All past sessions for this project, newest first. `excludeId` drops the
  * currently-running session so "last session" means the previous one.
  */
-export function listSessions({ limit = 0, excludeId = null, includeBackground = false } = {}) {
-  const dir = projectDir();
+export function listSessions({
+  limit = 0, excludeId = null, includeBackground = false, cwd, since = 0,
+} = {}) {
+  const dir = projectDir(cwd);
   let files = [];
   try {
     files = readdirSync(dir).filter((f) => f.endsWith(".jsonl")).map((f) => path.join(dir, f));
@@ -154,6 +156,7 @@ export function listSessions({ limit = 0, excludeId = null, includeBackground = 
     .filter(Boolean)
     .filter((s) => s.id !== excludeId)
     .filter((s) => includeBackground || !s.background)
+    .filter((s) => s.mtimeMs > since)
     .sort((a, b) => b.mtimeMs - a.mtimeMs);
   return limit > 0 ? sessions.slice(0, limit) : sessions;
 }
@@ -161,9 +164,9 @@ export function listSessions({ limit = 0, excludeId = null, includeBackground = 
 // ─── full-text search ────────────────────────────────────────────────────────
 
 /** Search every transcript for `query`; return sessions with a matching snippet. */
-export function searchSessions(query, { limit = 8 } = {}) {
+export function searchSessions(query, { limit = 8, cwd } = {}) {
   const q = query.toLowerCase();
-  const dir = projectDir();
+  const dir = projectDir(cwd);
   let files = [];
   try {
     files = readdirSync(dir).filter((f) => f.endsWith(".jsonl")).map((f) => path.join(dir, f));
