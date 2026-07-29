@@ -30,7 +30,9 @@ const stripAnsi = (s) => s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
 // ─── menu definition ─────────────────────────────────────────────────────────
 
 const MENU_ITEMS = [
-  { label: "▶ Start Claudbot",       desc: "launch the Claude Code agent",               action: "start" },
+  { label: "▶ Start Claudbot",       desc: "main chat — clean slate, no memory",         action: "start" },
+  { label: "📁 Project chat",        desc: "open a repo's chat, with its memory",        action: "project" },
+  { label: "🎙 Voice",               desc: "talk to Claudbot (English / Spanish)",       action: "voice" },
   { label: "🗓 Organizer",           desc: "your day: tasks, calendar & overnight news", action: "organizer" },
   { label: "↻ Resume last session",  desc: "summarize where you left off, then start",   action: "resume" },
   { label: "🔍 Recall",              desc: "browse & search past sessions",              action: "recall" },
@@ -82,8 +84,8 @@ function renderLastSession(ls, termWidth) {
 
 /**
  * Render the Claudbot menu and resolve with the chosen action string:
- * start | organizer | resume | recall | dashboard | briefing | dream |
- * night | doctor | update | exit
+ * start | project | voice | organizer | resume | recall | dashboard |
+ * briefing | dream | night | doctor | update | exit
  */
 export async function showMenu({ lastSession } = {}) {
   if (!isInteractive()) return "start";

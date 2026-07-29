@@ -184,6 +184,13 @@ function cmdHelp() {
     briefing --watch   Rebuild the digest on a schedule
     dashboard          Serve the morning command center (http://localhost:4500)
     organizer          Open your assistant home — tasks, calendar & news (http://localhost:4700)
+    voice              Talk to Claudbot — wake word, English + Spanish
+    voice setup        Install the voice subsystem (venv + dependencies)
+    voice devices      List microphones and speakers
+    voice train        Train the bilingual "Hey Aitor" wake word
+    screen on|off      Let Claude see your screen (off by default)
+    screen now         Capture and describe the screen right now
+    project <path>     Open a project-scoped chat that remembers that repo
     night              Run all idle processes together (dream + briefing + dashboard)
     onboard            Run the interactive setup wizard
     update             Pull latest code from GitHub + reinstall deps
@@ -931,6 +938,8 @@ async function cmdMenu() {
     const action = await showMenu({ lastSession });
     switch (action) {
       case "start":     return cmdStart(["--no-banner"]);
+      case "project":   return cmdProject([]);
+      case "voice":     return runScript("voice.mjs");
       case "resume":
         await cmdRecall(["last"]);
         return cmdStart(["--no-banner"]);
@@ -971,6 +980,9 @@ async function main() {
     case "briefing": return runScript("briefing.mjs", rest);
     case "dashboard":return runScript("dashboard.mjs", rest);
     case "organizer":return cmdOrganizer(rest);
+    case "voice":    return runScript("voice.mjs", rest);
+    case "screen":   return runScript("screen.mjs", rest);
+    case "project":  return cmdProject(rest);
     case "night":    return runScript("night.mjs", rest);
     case "onboard":  return runScript("scripts/onboard.mjs", rest);
     case "update":   return cmdUpdate();

@@ -30,3 +30,17 @@ NemoClaw-main/
 
 # briefing digests (generated each run, machine-specific)
 briefing/data/
+
+# voice subsystem: venv, downloaded/trained models, recorded samples
+voice/.venv/
+voice/models/
+voice/__pycache__/
+__pycache__/
+*.pyc
+
+# voice + screen runtime state
+.claudbot/voice/
+.claudbot/screen/
+
+# per-project chat memory (machine-specific paths)
+.claudbot/projects/

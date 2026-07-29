@@ -1,0 +1,28 @@
+# Claudbot voice subsystem
+#
+# Install into a dedicated venv:
+#   python -m venv voice/.venv
+#   voice\.venv\Scripts\python.exe -m pip install -r voice/requirements.txt
+#
+# `claudbot voice` finds voice/.venv automatically and falls back to `python`.
+
+# audio I/O + math
+sounddevice>=0.4.6
+numpy>=1.26
+scipy>=1.11
+
+# wake word
+openwakeword>=0.6.0
+onnxruntime>=1.17
+
+# text to speech (local, low latency, ships EN + ES voices)
+kokoro-onnx>=0.4.0
+
+# speech to text: keyless fallback that makes Spanish work without an NVCF id
+SpeechRecognition>=3.10
+
+# speech to text: NVIDIA Riva hosted (optional — only needed with a function id)
+# nvidia-riva-client>=2.15.0
+
+# custom wake-word speaker verifier (optional, no GPU needed)
+# scikit-learn>=1.4
