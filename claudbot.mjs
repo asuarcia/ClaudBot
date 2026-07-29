@@ -997,7 +997,7 @@ async function cmdProject(rest = []) {
     console.log(`\n  ${C.bold}Project chats${C.reset}\n`);
     for (const p of known) console.log(`  ${C.white}${p.name.padEnd(20)}${C.reset}${C.dim}${p.dir}${C.reset}`);
     console.log();
-    return;
+    return false;
   }
 
   const project = requested ? pm.resolveProject(requested) : await pickProject(pm);
@@ -1009,7 +1009,7 @@ async function cmdProject(rest = []) {
       );
       process.exit(1);
     }
-    return;
+    return false;
   }
 
   printBanner(process.env.CLAUDBOT_DEFAULT_MODE ?? "full");
@@ -1043,9 +1043,10 @@ async function cmdProject(rest = []) {
   console.log();
 
   pm.markOpened(project);
-  return cmdStart(["--no-banner"], {
+  await cmdStart(["--no-banner"], {
     project: { ...project, context: pm.contextBlock(project) },
   });
+  return true;
 }
 
 // ─── menu (default entry point) ──────────────────────────────────────────────
@@ -1083,8 +1084,12 @@ async function cmdMenu() {
     const action = await showMenu({ lastSession });
     switch (action) {
       case "start":     return cmdStart(["--no-banner"]);
-      case "project":   return cmdProject([]);
       case "voice":     return runScript("voice.mjs");
+      // Picking a project can end without launching (nothing tracked yet, or an
+      // empty answer) — fall back to the menu instead of quitting.
+      case "project":
+        if (await cmdProject([])) return;
+        break;
       case "resume":
         await cmdRecall(["last"]);
         return cmdStart(["--no-banner", "--no-scratchpad-note"]);

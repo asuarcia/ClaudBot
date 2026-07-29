@@ -209,6 +209,7 @@ export async function refreshMemory(project, { log = () => {} } = {}) {
   const skipped = fresh.length - batch.length;
 
   const summaries = [];
+  const done = [];
   for (const session of batch) {
     try {
       const summary = await mem.summarizeSession(session, {
@@ -216,8 +217,11 @@ export async function refreshMemory(project, { log = () => {} } = {}) {
         agentName: summaryAgent,
       });
       summaries.push(`### ${session.end.slice(0, 16).replace("T", " ")}\n${summary}`);
+      done.push(session);
       log(`summarized ${mem.shortId(session.id)}`);
     } catch (e) {
+      // Usually a transient NIM 429. Leave it out of the watermark below so the
+      // next refresh retries it instead of losing the session for good.
       log(`skipped ${mem.shortId(session.id)}: ${e.message}`);
     }
   }
@@ -246,7 +250,7 @@ export async function refreshMemory(project, { log = () => {} } = {}) {
     ...meta,
     dir,
     name,
-    mergedThrough: Math.max(...batch.map((s) => s.mtimeMs)),
+    mergedThrough: Math.max(since, ...done.map((s) => s.mtimeMs)),
     lastRefreshed: Date.now(),
   });
 
