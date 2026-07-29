@@ -1,0 +1,11 @@
+{
+  "name": "device-control-mcp",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "MCP server for controlling physical devices: Android over ADB, iOS over libimobiledevice, USB/serial enumeration.",
+  "main": "index.mjs",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  }
+}

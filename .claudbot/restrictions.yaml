@@ -64,6 +64,31 @@ deny:
   - "Write(C:/Users/*/AppData/Roaming/*)"
   - "Write(C:/Users/*/AppData/Local/*)"
 
+  # ── Devices: destructive Android / iOS operations ──────────────────────────
+  # These wipe a phone or brick a bootloader. The device-control MCP server
+  # refuses them internally too — this layer catches raw shell attempts.
+  - "Bash(adb * reboot bootloader*)"
+  - "Bash(adb * reboot recovery*)"
+  - "Bash(adb reboot bootloader*)"
+  - "Bash(adb reboot recovery*)"
+  - "Bash(adb * shell recovery*)"
+  - "Bash(adb * shell wipe*)"
+  - "Bash(adb shell wipe*)"
+  - "Bash(adb * shell am broadcast * MASTER_CLEAR*)"
+  - "Bash(adb * shell pm clear*)"
+  - "Bash(adb shell pm clear*)"
+  - "Bash(adb * shell rm -rf /sdcard*)"
+  - "Bash(adb shell rm -rf /sdcard*)"
+  - "Bash(adb * shell su*)"
+  - "Bash(adb * disable-verity*)"
+  - "Bash(adb * unroot*)"
+  - "Bash(fastboot *)"
+  - "Bash(heimdall *)"
+  - "Bash(idevicerestore *)"
+  - "Bash(idevicediagnostics restart*)"
+  - "Bash(idevicediagnostics shutdown*)"
+  - "Bash(ideviceactivation *)"
+
   # ── Credentials ────────────────────────────────────────────────────────────
   - "Edit(C:/Users/*/.ssh/*)"
   - "Write(C:/Users/*/.ssh/*)"

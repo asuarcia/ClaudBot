@@ -71,13 +71,23 @@ function loadDisallowedTools() {
   } catch { return []; }
 }
 
+// MCP servers Claudbot owns and keeps registered on every launch. Claude Code
+// ignores settings.json.mcpServers entirely — servers must be in .mcp.json AND
+// listed in enabledMcpjsonServers, or they load with a trust prompt (or not at all).
+const OWNED_MCP_SERVERS = ["claudbot-exec", "device-control"];
+
 function patchSettings() {
-  const execPath    = path.join(ROOT, "mcp-servers", "claudbot-exec", "index.mjs");
   const mcpJsonPath = path.join(CLAUDBOT_ROOT, ".mcp.json");
   let mcpJson = {};
   try { mcpJson = JSON.parse(readFileSync(mcpJsonPath, "utf8")); } catch { /* first run */ }
   mcpJson.mcpServers = mcpJson.mcpServers ?? {};
-  mcpJson.mcpServers["claudbot-exec"] = { command: "node", args: [execPath], env: {} };
+  for (const name of OWNED_MCP_SERVERS) {
+    mcpJson.mcpServers[name] = {
+      command: "node",
+      args: [path.join(ROOT, "mcp-servers", name, "index.mjs")],
+      env: {},
+    };
+  }
   writeFileSync(mcpJsonPath, JSON.stringify(mcpJson, null, 2));
 
   const settingsPath = path.join(CLAUDBOT_ROOT, ".claude", "settings.json");
@@ -85,7 +95,7 @@ function patchSettings() {
   try { settings = JSON.parse(readFileSync(settingsPath, "utf8")); } catch { /* first run */ }
   delete settings.mcpServers;
   const enabled = new Set(settings.enabledMcpjsonServers ?? []);
-  enabled.add("claudbot-exec");
+  for (const name of OWNED_MCP_SERVERS) enabled.add(name);
   settings.enabledMcpjsonServers = [...enabled];
   mkdirSync(path.dirname(settingsPath), { recursive: true });
   writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
