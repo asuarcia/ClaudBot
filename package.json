@@ -7,12 +7,15 @@
     "claudbot": "./claudbot.mjs"
   },
   "scripts": {
-    "setup":    "npm install && cd mcp-servers/claudbot-exec && npm install",
+    "setup":    "npm install && cd mcp-servers/claudbot-exec && npm install && cd ../device-control && npm install",
     "onboard":  "node scripts/onboard.mjs",
     "start":    "node claudbot.mjs",
     "channels": "node channel-server.mjs",
     "dream":    "node dream.mjs",
-    "dream:watch": "node dream.mjs --watch"
+    "dream:watch": "node dream.mjs --watch",
+    "voice":    "node voice.mjs",
+    "screen":   "node screen.mjs",
+    "check":    "node scripts/check-cost-routing.mjs"
   },
   "engines": {
     "node": ">=22.0.0"

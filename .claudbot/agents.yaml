@@ -26,16 +26,32 @@ agents:
       solving. Give it the full code/context it needs — it has no prior
       conversation history.
 
+  # Default for research and deep-web work. Gemini is fast enough to finish
+  # inside the MCP request cap, which the NIM reasoning models routinely are not
+  # (see `researcher` below). Swap the model for a Pro-tier id if you want more
+  # depth and can live with the latency.
+  - name: gemini
+    model: gemini-3.6-flash
+    endpoint: https://generativelanguage.googleapis.com/v1beta/openai
+    apiKeyEnv: GEMINI_API_KEY
+    jobDescription: >
+      Research and deep-web work — the default for anything investigative
+      (Gemini, OpenAI-compatible endpoint). Best for: web and topic research,
+      current events, literature review, comparing options, trade-off analysis,
+      and fact-checking. Prefer this over `researcher`, which is slower and
+      times out on large prompts. Falls back to `researcher` if GEMINI_API_KEY
+      is not set.
+
   - name: researcher
     model: nvidia/nemotron-3-ultra-550b-a55b
     endpoint: https://integrate.api.nvidia.com/v1
     apiKeyEnv: NIM_API_KEY
     jobDescription: >
-      Deep research, reasoning, summarization, and planning (Nemotron 3 Ultra,
-      550B MoE — the catalog's flagship reasoning model). Best for: web/topic
-      research, literature review, multi-step reasoning, architecture and
-      project planning, comparing options, and trade-off analysis. Returns
-      well-structured markdown.
+      FALLBACK research agent — use `gemini` first. Deep reasoning, planning and
+      summarization (Nemotron 3 Ultra, 550B MoE). Best for: multi-step
+      reasoning, architecture and project planning, trade-off analysis. Returns
+      well-structured markdown. Warning: on large prompts this regularly exceeds
+      the MCP request cap, so do not route latency-sensitive work here.
 
   - name: fast
     model: nvidia/nemotron-3-nano-omni-30b-a3b-reasoning
