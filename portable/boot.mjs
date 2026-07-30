@@ -31,6 +31,13 @@ import { lock, unlock, shred, staleUnlock } from "./store.mjs";
 import * as vc from "./veracrypt.mjs";
 import { reconcileTranscripts } from "./reconcile.mjs";
 
+// Reaching this file at all means we are running from the drive, so assert
+// portable mode for THIS process before any path is resolved. Setting it only
+// on the child's env (further down) left appDir() here returning the drive root
+// instead of <drive>/app — which made the spawn below point at a claudbot.mjs
+// that does not exist, and filed transcripts under the wrong directory name.
+process.env.CLAUDBOT_PORTABLE = "1";
+
 const C = {
   reset: "\x1b[0m", dim: "\x1b[2m", bold: "\x1b[1m",
   red: "\x1b[31m", green: "\x1b[32m", yellow: "\x1b[33m", cyan: "\x1b[36m",

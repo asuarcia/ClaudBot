@@ -219,7 +219,11 @@ async function fetchRuntimes(target) {
         throw new Error(tarSays || `no node binary in ${p.archive}`);
       }
 
-      renameSync(staged, outDir);
+      // Copy rather than rename: the staging dir lives in the OS temp dir (on
+      // the system drive) and the target is the USB stick, so renameSync always
+      // fails with EXDEV. That silently cost every drive its bundled runtimes.
+      cpSync(staged, outDir, { recursive: true });
+      rmSync(staged, { recursive: true, force: true });
       if (p.key !== "win-x64") {
         try { chmodSync(path.join(outDir, "bin", "node"), 0o755); } catch { /* FAT32 has no exec bit */ }
       }
@@ -248,14 +252,30 @@ function fetchClaudeCode(target) {
   writeFileSync(path.join(dir, "package.json"), JSON.stringify({
     name: "claudbot-portable-claude", private: true, version: "1.0.0",
   }, null, 2));
-  // npm.cmd directly rather than shell:true — passing args through a shell is
-  // both a quoting hazard and now a Node deprecation warning (DEP0190).
-  const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-  const r = spawnSync(npm, ["install", "@anthropic-ai/claude-code", "--no-audit", "--no-fund"], {
+  // Invoke npm's JS entry point with this same Node binary rather than the npm
+  // launcher. On Windows the launcher is npm.cmd, and Node >=22 refuses to
+  // spawnSync a .cmd without shell:true (CVE-2024-27980) — which is why the
+  // previous "npm.cmd, no shell" approach failed with EINVAL. Running
+  // npm-cli.js directly needs no shell (so no quoting hazard) and is portable.
+  const npmCli = path.join(path.dirname(process.execPath),
+    "node_modules", "npm", "bin", "npm-cli.js");
+  const useCli = existsSync(npmCli);
+  const cmd = useCli ? process.execPath : (process.platform === "win32" ? "npm.cmd" : "npm");
+  const args = (useCli ? [npmCli] : []).concat(
+    ["install", "@anthropic-ai/claude-code", "--no-audit", "--no-fund"]);
+  const r = spawnSync(cmd, args, {
     cwd: dir, encoding: "utf8", stdio: "pipe",
+    shell: !useCli && process.platform === "win32",
   });
   if (r.status !== 0) {
-    warn(`could not install Claude Code: ${(r.stderr || "").trim().split("\n").slice(-3).join(" ")}`);
+    // r.error is set when the process could not be spawned at all (npm not on
+    // PATH, for instance). Without it the warning prints an empty reason and
+    // the real failure is invisible.
+    const why = r.error
+      ? `${r.error.code ?? ""} ${r.error.message}`.trim()
+      : (r.stderr || r.stdout || "").trim().split("\n").slice(-3).join(" ")
+        || `npm exited ${r.status}`;
+    warn(`could not install Claude Code: ${why}`);
     return false;
   }
   return true;
@@ -383,9 +403,43 @@ Generated ${new Date().toISOString().slice(0, 10)} by scripts/make-portable.mjs
 function copyPortableMachinery(target) {
   const dst = path.join(target, "portable");
   mkdirSync(dst, { recursive: true });
-  for (const f of ["boot.mjs", "store.mjs", "veracrypt.mjs", "paths.mjs", "reconcile.mjs"]) {
-    cpSync(path.join(ROOT, "portable", f), path.join(dst, f));
+  // Copy every module rather than a hand-maintained list. A list silently
+  // drifts as imports are added: omitting prompt.mjs shipped drives whose
+  // boot.mjs threw ERR_MODULE_NOT_FOUND before printing anything.
+  for (const e of readdirSync(path.join(ROOT, "portable"), { withFileTypes: true })) {
+    if (!e.isFile() || !e.name.endsWith(".mjs")) continue;
+    cpSync(path.join(ROOT, "portable", e.name), path.join(dst, e.name));
   }
+}
+
+/**
+ * Assert the assembled drive can actually start: every relative import reachable
+ * from boot.mjs must exist on the drive. check:portable exercises these modules
+ * in the repo, where they always resolve, so only a check against the built
+ * artifact catches a missing file.
+ */
+function verifyPortableMachinery(target) {
+  const dir = path.join(target, "portable");
+  const seen = new Set();
+  const missing = [];
+  const walk = (file) => {
+    if (seen.has(file)) return;
+    seen.add(file);
+    let src;
+    try { src = readFileSync(path.join(dir, file), "utf8"); }
+    catch { missing.push(file); return; }
+    for (const m of src.matchAll(/^\s*(?:import|export)[\s\S]*?from\s+["'](\.\/[^"']+)["']/gm)) {
+      walk(m[1].slice(2));
+    }
+  };
+  walk("boot.mjs");
+  if (missing.length) {
+    throw new Error(
+      `the drive is missing module(s) boot.mjs needs: ${missing.join(", ")}.\n` +
+      `  Without them the drive cannot start on any machine.`,
+    );
+  }
+  return seen.size;
 }
 
 function dirSize(dir) {
@@ -430,15 +484,26 @@ async function main() {
   good(`${files} source file(s)`);
   if (!args.includeVoice) info("voice/.venv and voice/models excluded (762 MB, shelved)");
   copyPortableMachinery(target);
-  good("portable machinery");
+  good(`portable machinery (${verifyPortableMachinery(target)} modules, imports resolve)`);
 
   step("2/6  Runtimes");
   if (args.skipRuntimes) {
     warn("skipped — the drive will need Node installed on each host");
   } else {
     const failed = await fetchRuntimes(target);
+    // Every platform failing means the drive cannot run anywhere the host has
+    // no Node — the whole point of bundling. That is a build failure, not a
+    // warning to scroll past, so say so instead of reporting success.
+    if (failed.length === PLATFORMS.length) {
+      throw new Error(
+        `no Node runtime could be bundled (all ${PLATFORMS.length} platforms failed: ${failed.join(", ")}).\n` +
+        `  The drive would only run on hosts that already have Node installed.\n` +
+        `  Re-run with --skip-runtimes if that is genuinely what you want.`,
+      );
+    }
     if (failed.length) warn(`missing runtimes: ${failed.join(", ")} — those platforms will need host Node`);
     if (fetchClaudeCode(target)) good("Claude Code CLI bundled");
+    else warn("Claude Code CLI NOT bundled — the drive will need it installed on each host");
   }
 
   step("3/6  Launchers and README");

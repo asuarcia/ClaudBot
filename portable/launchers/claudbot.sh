@@ -50,7 +50,38 @@ elif command -v node >/dev/null 2>&1; then
 fi
 
 if [ -z "$NODE" ]; then
-  cat >&2 <<EOF
+  if [ -n "$KEY" ] && [ -f "$BUNDLED" ]; then
+    # Present but not executable. exFAT and FAT32 store no permission bits, so
+    # the exec flag comes from the mount options and the chmod above was a
+    # no-op. Say that plainly: telling someone the file is missing sends them
+    # off to rebuild a drive that is perfectly fine.
+    # Work out the backing device so the suggested command is copy-pasteable.
+    SRC=""
+    if command -v findmnt >/dev/null 2>&1; then
+      SRC="$(findmnt -no SOURCE --target "$DIR" 2>/dev/null || true)"
+    fi
+    cat >&2 <<EOF
+
+  The bundled Node runtime is present but cannot be executed.
+
+    $BUNDLED
+
+  This mount grants no execute permission. That is normal for exFAT/FAT32,
+  where permissions come from the mount options rather than the filesystem,
+  which is also why chmod cannot fix it.
+
+  Mount the drive again with execute permission. Note that "mount -o remount"
+  does NOT change these masks — it has to be a full unmount and mount:
+
+    sudo umount "$DIR"
+    sudo mount -o fmask=0022,dmask=0022 ${SRC:-/dev/sdXN} "$DIR"
+
+  Or, simplest, start Claudbot through any Node 22+ already on this machine:
+    node "$DIR/portable/boot.mjs"
+
+EOF
+  else
+    cat >&2 <<EOF
 
   No Node runtime found.
 
@@ -59,6 +90,7 @@ if [ -z "$NODE" ]; then
   runtime, or install Node 22+ here.
 
 EOF
+  fi
   exit 1
 fi
 
