@@ -18,6 +18,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { vaultPath } from "./portable/paths.mjs";
 
 const ROOT      = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR  = path.join(ROOT, "briefing", "data");
@@ -42,8 +43,14 @@ function loadBriefing() {
 }
 
 // Recent commits across the user's repos — fully local, no API.
+// Extra repos are configurable because on a portable drive the machine-specific
+// C:\Repo\* paths don't exist; CLAUDBOT_REPOS is a path-delimited list.
 function projectPanel() {
-  const repos = [ROOT, "C:\\Repo\\TradeAlgo", "C:\\Repo\\MyBrain"].filter((r) => existsSync(path.join(r, ".git")));
+  const extra = process.env.CLAUDBOT_REPOS
+    ? process.env.CLAUDBOT_REPOS.split(path.delimiter).filter(Boolean)
+    : [path.join(path.dirname(ROOT), "TradeAlgo"), "C:\\Repo\\TradeAlgo"];
+  const repos = [...new Set([ROOT, vaultPath(), ...extra].map((r) => path.resolve(r)))]
+    .filter((r) => existsSync(path.join(r, ".git")));
   const out = [];
   for (const repo of repos) {
     const log = spawnSync("git", ["log", "-3", `--pretty=%h${SEP}%s${SEP}%cr`], { cwd: repo, encoding: "utf8" });

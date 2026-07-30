@@ -25,6 +25,7 @@ import readline from "node:readline";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
+import { vaultPath, claudeBin, isPortable, portableEnv } from "./portable/paths.mjs";
 
 // ─── paths ───────────────────────────────────────────────────────────────────
 
@@ -74,7 +75,13 @@ function loadDisallowedTools() {
 // MCP servers Claudbot owns and keeps registered on every launch. Claude Code
 // ignores settings.json.mcpServers entirely — servers must be in .mcp.json AND
 // listed in enabledMcpjsonServers, or they load with a trust prompt (or not at all).
-const OWNED_MCP_SERVERS = ["claudbot-exec", "device-control"];
+const OWNED_MCP_SERVERS = ["claudbot-exec", "device-control", "obsidian-brain"];
+
+// Extra argv per server. obsidian-brain takes the vault path, which moves with
+// the drive in portable mode — so it must be recomputed, never persisted.
+const MCP_EXTRA_ARGS = {
+  "obsidian-brain": () => [vaultPath()],
+};
 
 function patchSettings() {
   const mcpJsonPath = path.join(CLAUDBOT_ROOT, ".mcp.json");
@@ -83,8 +90,10 @@ function patchSettings() {
   mcpJson.mcpServers = mcpJson.mcpServers ?? {};
   for (const name of OWNED_MCP_SERVERS) {
     mcpJson.mcpServers[name] = {
-      command: "node",
-      args: [path.join(ROOT, "mcp-servers", name, "index.mjs")],
+      // process.execPath, not "node": on a portable drive the host may have no
+      // Node on PATH, and we are already running under the bundled one.
+      command: process.execPath,
+      args: [path.join(ROOT, "mcp-servers", name, "index.mjs"), ...(MCP_EXTRA_ARGS[name]?.() ?? [])],
       env: {},
     };
   }
@@ -101,11 +110,13 @@ function patchSettings() {
   writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
 }
 
-// Run another script in this repo, inheriting stdio
+// Run another script in this repo, inheriting stdio.
+// process.execPath rather than "node" — a portable drive can't assume the host
+// has Node installed, and we're already running under the bundled one.
 function runScript(scriptFile, extraArgs = []) {
-  const result = spawnSync("node", [path.join(ROOT, scriptFile), ...extraArgs], {
+  const result = spawnSync(process.execPath, [path.join(ROOT, scriptFile), ...extraArgs], {
     stdio: "inherit",
-    env: process.env,
+    env: { ...process.env, ...portableEnv() },
   });
   process.exit(result.status ?? 0);
 }
@@ -136,6 +147,25 @@ function cmdOrganizer(rest = []) {
   child.on("exit", (code) => process.exit(code ?? 0));
 }
 
+/**
+ * Merge this install with the USB drive, both directions.
+ *
+ * Imported lazily so a desktop-only user never pays to load the sync/crypto
+ * modules, and so a broken drive can't stop the menu from rendering.
+ */
+async function cmdSync(rest = []) {
+  const driveIdx = rest.indexOf("--drive");
+  const drive = driveIdx !== -1 ? rest[driveIdx + 1] : null;
+  const yes = rest.includes("--yes") || rest.includes("-y");
+  try {
+    const { runSync } = await import("./portable/sync-command.mjs");
+    return await runSync({ drive, yes });
+  } catch (err) {
+    console.error(`\n  ${C.red}Sync unavailable: ${err.message}${C.reset}\n`);
+    return false;
+  }
+}
+
 // ─── banner ──────────────────────────────────────────────────────────────────
 
 const C = {
@@ -144,6 +174,7 @@ const C = {
   dim:    "\x1b[2m",
   cyan:   "\x1b[36m",
   yellow: "\x1b[33m",
+  red:    "\x1b[31m",
   green:  "\x1b[32m",
   blue:   "\x1b[34m",
   magenta:"\x1b[35m",
@@ -211,10 +242,9 @@ function cmdHelp() {
     briefing --watch   Rebuild the digest on a schedule
     dashboard          Serve the morning command center (http://localhost:4500)
     organizer          Open your assistant home — tasks, calendar & news (http://localhost:4700)
-    voice              Talk to Claudbot — wake word, English + Spanish
-    voice setup        Install the voice subsystem (venv + dependencies)
-    voice devices      List microphones and speakers
-    voice train        Train the bilingual "Hey Aitor" wake word
+    sync               Merge changes with your USB drive, both directions
+    sync --drive <p>   Point at a specific drive instead of auto-detecting
+    sync --yes         Apply without confirming
     screen on|off      Let Claude see your screen (off by default)
     screen now         Capture and describe the screen right now
     project            Pick a project chat (remembers that repo)
@@ -878,10 +908,13 @@ async function cmdStart(argv, { project = null } = {}) {
 
   // Spawn Claude and keep restarting whenever the restart flag is set
   const startClaude = async () => {
-    const claude = spawn("claude", claudeArgs, {
+    const claude = spawn(claudeBin(), claudeArgs, {
       cwd,
       stdio: "inherit",
-      env: process.env,
+      // portableEnv() carries CLAUDE_CONFIG_DIR, which keeps auth, transcripts
+      // and sessions on the drive instead of the host's home directory.
+      env: { ...process.env, ...portableEnv() },
+      shell: isPortable() && process.platform === "win32", // claude.cmd needs a shell
     });
 
     // Write PID so `claudbot restart` can signal this process
@@ -1084,7 +1117,6 @@ async function cmdMenu() {
     const action = await showMenu({ lastSession });
     switch (action) {
       case "start":     return cmdStart(["--no-banner"]);
-      case "voice":     return runScript("voice.mjs");
       // Picking a project can end without launching (nothing tracked yet, or an
       // empty answer) — fall back to the menu instead of quitting.
       case "project":
@@ -1105,6 +1137,7 @@ async function cmdMenu() {
       // These return to the menu when done:
       case "recall":    await cmdRecall([]); break;
       case "doctor":    await cmdDoctor();   break;
+      case "sync":      await cmdSync([]);   break;
       default:          return;
     }
   }
@@ -1130,6 +1163,9 @@ async function main() {
     case "briefing": return runScript("briefing.mjs", rest);
     case "dashboard":return runScript("dashboard.mjs", rest);
     case "organizer":return cmdOrganizer(rest);
+    case "sync":     return cmdSync(rest);
+    // Unadvertised on purpose: voice is fully built and still runs, it just
+    // isn't in the menu or `help` output. Keep this route.
     case "voice":    return runScript("voice.mjs", rest);
     case "screen":   return runScript("screen.mjs", rest);
     case "project":  return cmdProject(rest);

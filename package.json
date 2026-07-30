@@ -15,7 +15,9 @@
     "dream:watch": "node dream.mjs --watch",
     "voice":    "node voice.mjs",
     "screen":   "node screen.mjs",
-    "check":    "node scripts/check-cost-routing.mjs"
+    "check":    "node scripts/check-cost-routing.mjs && node scripts/check-portable.mjs",
+    "check:portable": "node scripts/check-portable.mjs",
+    "make-portable":  "node scripts/make-portable.mjs"
   },
   "engines": {
     "node": ">=22.0.0"

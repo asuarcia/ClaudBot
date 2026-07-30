@@ -25,13 +25,14 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { vaultPath } from "./portable/paths.mjs";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const CLAUDBOT_ROOT = path.join(ROOT, ".claudbot");
 const PROJECTS_DIR = path.join(CLAUDBOT_ROOT, "projects");
-const VAULT_PROJECTS = path.join(
-  process.env.CLAUDBOT_VAULT ?? "C:\\Repo\\MyBrain", "Projects",
-);
+// Resolved lazily: on a portable drive the vault only exists once the encrypted
+// store is unlocked, which happens after this module is first imported.
+const vaultProjects = () => path.join(vaultPath(), "Projects");
 
 // Keep the loaded memory genuinely compact — this is a briefing, not an archive.
 const MAX_MEMORY_CHARS = 6_000;
@@ -272,7 +273,7 @@ export function markOpened(project) {
 /** The vault's long-term note for this project, if there is one. */
 export function vaultNote(name) {
   for (const candidate of [`${name}.md`, `${slugify(name)}.md`]) {
-    const file = path.join(VAULT_PROJECTS, candidate);
+    const file = path.join(vaultProjects(), candidate);
     if (existsSync(file)) {
       try {
         return { file, text: readFileSync(file, "utf8") };

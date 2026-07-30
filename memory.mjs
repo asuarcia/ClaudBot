@@ -17,8 +17,8 @@ import {
   existsSync, readFileSync, writeFileSync, readdirSync, statSync,
 } from "node:fs";
 import path from "node:path";
-import os from "node:os";
 import { fileURLToPath } from "node:url";
+import { claudeHome } from "./portable/paths.mjs";
 
 const ROOT          = path.dirname(fileURLToPath(import.meta.url));
 const CLAUDBOT_ROOT = path.join(ROOT, ".claudbot");
@@ -29,9 +29,15 @@ const INDEX_FILE    = path.join(CLAUDBOT_ROOT, "conversation-index.json");
 // Claude Code stores each project's transcripts in a directory whose name is the
 // absolute cwd with every non-alphanumeric char replaced by a dash. Claudbot
 // launches Claude with cwd = .claudbot, so that's the cwd we encode.
+export function encodeCwd(cwd = CLAUDBOT_ROOT) {
+  return path.resolve(cwd).replace(/[^a-zA-Z0-9]/g, "-");
+}
+
+// claudeHome() rather than os.homedir(): on a portable drive CLAUDE_CONFIG_DIR
+// points at the stick, so transcripts are read from and written to the drive
+// instead of whatever machine happens to be hosting the session.
 export function projectDir(cwd = CLAUDBOT_ROOT) {
-  const encoded = path.resolve(cwd).replace(/[^a-zA-Z0-9]/g, "-");
-  return path.join(os.homedir(), ".claude", "projects", encoded);
+  return path.join(claudeHome(), "projects", encodeCwd(cwd));
 }
 
 // ─── transcript parsing ──────────────────────────────────────────────────────
