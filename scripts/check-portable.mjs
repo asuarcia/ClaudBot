@@ -20,6 +20,7 @@ import { runtimeKey } from "../portable/paths.mjs";
 import {
   scanFiles, planSync, applySync, conflictName,
 } from "../portable/sync.mjs";
+import { probe as vcProbe, mount as vcMount } from "../portable/veracrypt.mjs";
 import {
   mkdirSync, writeFileSync, readFileSync, readdirSync,
   existsSync, rmSync, statSync, utimesSync,
@@ -268,6 +269,35 @@ section("Bundled runtime naming");
   ok("darwin x64 maps through", runtimeKey("darwin", "x64") === "darwin-x64");
   ok("linux x64 maps through", runtimeKey("linux", "x64") === "linux-x64");
   ok("unknown platform yields null", runtimeKey("sunos", "x64") === null);
+}
+
+// ─── veracrypt argument safety ───────────────────────────────────────────────
+
+section("VeraCrypt argument handling");
+{
+  // probe() must degrade honestly rather than throwing, so the boot path can
+  // explain why a drive won't open here.
+  const p = vcProbe();
+  ok("probe reports a usable flag", typeof p.usable === "boolean");
+  ok("probe explains itself when unusable", p.usable || (typeof p.reason === "string" && p.reason.length > 0), p.reason);
+
+  // mount() must reject inputs the child's own parser would mishandle. These
+  // fire before any binary lookup, so they're testable without VeraCrypt.
+  const rejects = (pass, why) => {
+    let msg = null;
+    try { vcMount("Z:\\nope.hc", pass); } catch (e) { msg = e.message; }
+    // Either the guard fired, or we got the "not installed" message — which
+    // would mean the guard was skipped. Only the former is a pass.
+    return { ok: msg !== null && !/not installed/i.test(msg), msg, why };
+  };
+  const nl = rejects("has\nnewline");
+  ok("passphrase with a newline is rejected", nl.ok, nl.msg ?? "no error");
+  const nul = rejects("has" + String.fromCharCode(0) + "null");
+  ok("passphrase with a null byte is rejected", nul.ok, nul.msg ?? "no error");
+  if (process.platform === "win32") {
+    const slash = rejects("/quit");
+    ok("option-like passphrase rejected on Windows", slash.ok, slash.msg ?? "no error");
+  }
 }
 
 // ─── sync ────────────────────────────────────────────────────────────────────

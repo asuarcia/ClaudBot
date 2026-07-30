@@ -100,15 +100,53 @@ function freeDriveLetter() {
 }
 
 /**
+ * Reject passphrases that VeraCrypt's own argument parser or our stdin framing
+ * would mishandle. This is not shell escaping — nothing here runs through a
+ * shell — it is about the child's own parsing.
+ *
+ *   - A newline would terminate the value early on the `--stdin` path.
+ *   - On Windows, options are `/`-prefixed, so a passphrase or path beginning
+ *     with `/` can be swallowed as a flag rather than a value.
+ */
+function assertSafeForArgv(passphrase, container) {
+  if (/[\r\n\0]/.test(passphrase)) {
+    throw new Error("VeraCrypt mode can't take a passphrase containing newlines or null bytes.");
+  }
+  if (process.platform === "win32" && passphrase.startsWith("/")) {
+    throw new Error(
+      "VeraCrypt on Windows takes the passphrase as a command-line option, so one " +
+      "starting with '/' would be parsed as a flag. Use a passphrase that doesn't " +
+      "start with '/', or switch this drive to store mode.",
+    );
+  }
+  if (container.startsWith("-") || (process.platform === "win32" && container.startsWith("/"))) {
+    throw new Error(`refusing to pass an option-like container path: ${container}`);
+  }
+}
+
+/**
  * Mount `container`. Returns the path the plaintext is reachable at.
  *
- * Security note worth being explicit about: the passphrase is passed as a
- * command-line argument, which is briefly visible in the host's process list.
- * VeraCrypt's CLI offers no portable stdin path across all three platforms, so
- * this is inherent to driving it programmatically. The Node-native store has no
- * such exposure — another reason it is the default.
+ * Passphrase handling differs by platform, and the difference is a real
+ * security property rather than an implementation detail:
+ *
+ *   Unix  — piped through stdin via `--stdin`, so it never appears in argv and
+ *           never shows up in the host's process list.
+ *   Win32 — VeraCrypt.exe has no stdin path; `/password` on the command line is
+ *           the only non-interactive option, so the passphrase IS briefly
+ *           visible to anything enumerating processes on that machine. The
+ *           `/keyfile` alternative is worse: it would mean writing the
+ *           passphrase to the stick in plaintext.
+ *
+ * The Node-native store has no such exposure on any platform, which is one of
+ * the reasons it is the default mode.
  */
 export function mount(container, passphrase, { mountPoint } = {}) {
+  // Validate inputs before anything else. Bad input is bad input whether or not
+  // VeraCrypt happens to be installed, and failing fast here keeps the guard
+  // reachable (and testable) on machines that can't mount at all.
+  assertSafeForArgv(passphrase, container);
+
   const { usable, binary, reason } = probe();
   if (!usable) throw new Error(reason);
   if (!existsSync(container)) throw new Error(`container not found: ${container}`);
@@ -130,16 +168,18 @@ export function mount(container, passphrase, { mountPoint } = {}) {
   }
 
   const target = mountPoint ?? path.join(os.tmpdir(), `claudbot-vc-${process.pid}`);
+  // `--stdin` keeps the passphrase out of argv. `--` ends option parsing so a
+  // container or mount path can never be read as a flag.
   const args = [
-    "--text", "--non-interactive",
+    "--text", "--non-interactive", "--stdin",
     "--pim=0", "--keyfiles=", "--protect-hidden=no",
-    `--password=${passphrase}`,
-    container, target,
+    "--", container, target,
   ];
+  const opts = { encoding: "utf8", input: `${passphrase}\n` };
   const useSudo = typeof process.getuid === "function" && process.getuid() !== 0;
   const r = useSudo
-    ? spawnSync("sudo", ["-n", binary, ...args], { encoding: "utf8" })
-    : spawnSync(binary, args, { encoding: "utf8" });
+    ? spawnSync("sudo", ["-n", binary, ...args], opts)
+    : spawnSync(binary, args, opts);
   if (r.status !== 0) {
     throw new Error(`VeraCrypt mount failed: ${(r.stderr || r.stdout || "").trim() || `exit ${r.status}`}`);
   }
@@ -157,7 +197,7 @@ export function dismount(mountedAt) {
       return r.status === 0 ? { ok: true } : { ok: false, error: (r.stderr || r.stdout || "").trim() };
     }
     const useSudo = typeof process.getuid === "function" && process.getuid() !== 0;
-    const args = ["--text", "--non-interactive", "--dismount", mountedAt];
+    const args = ["--text", "--non-interactive", "--dismount", "--", mountedAt];
     const r = useSudo
       ? spawnSync("sudo", ["-n", binary, ...args], { encoding: "utf8" })
       : spawnSync(binary, args, { encoding: "utf8" });

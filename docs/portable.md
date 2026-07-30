@@ -172,8 +172,13 @@ A real VeraCrypt container.
 - Stronger and far more battle-tested.
 - **Needs VeraCrypt installed AND administrator rights on every host.** Without
   those the drive simply will not open.
-- The passphrase is passed on VeraCrypt's command line, so it is briefly
-  visible in the host's process list. `store` mode has no such exposure.
+- Passphrase handling differs by platform, and the difference is real:
+  **Unix** pipes it through `--stdin`, so it never reaches argv. **Windows**
+  has no stdin path — `/password` on the command line is the only
+  non-interactive option, so the passphrase is briefly visible to anything
+  enumerating processes on that machine. (`/keyfile` would be worse: it means
+  writing the passphrase to the stick in plaintext.) `store` mode has no such
+  exposure on any platform.
 
 Switch with:
 
