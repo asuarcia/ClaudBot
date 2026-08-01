@@ -248,8 +248,17 @@ function fetchClaudeCode(target) {
     info("claude-code already present, skipping");
     return true;
   }
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(path.join(dir, "package.json"), JSON.stringify({
+  // Install into the system temp dir, never straight onto the drive. Portable
+  // drives are formatted exFAT (the only filesystem Windows, macOS and Linux
+  // all write), and exFAT has no hardlinks — but the claude-code postinstall
+  // places its binary with link(), which then dies with EISDIR/EPERM and
+  // leaves an empty runtime/claude-code behind. Staging on the system drive
+  // lets the postinstall link freely; the finished tree copies over fine,
+  // because copying turns those links into ordinary files.
+  const stage = path.join(os.tmpdir(), `claudbot-claude-${process.pid}`);
+  rmSync(stage, { recursive: true, force: true });
+  mkdirSync(stage, { recursive: true });
+  writeFileSync(path.join(stage, "package.json"), JSON.stringify({
     name: "claudbot-portable-claude", private: true, version: "1.0.0",
   }, null, 2));
   // Invoke npm's JS entry point with this same Node binary rather than the npm
@@ -264,7 +273,7 @@ function fetchClaudeCode(target) {
   const args = (useCli ? [npmCli] : []).concat(
     ["install", "@anthropic-ai/claude-code", "--no-audit", "--no-fund"]);
   const r = spawnSync(cmd, args, {
-    cwd: dir, encoding: "utf8", stdio: "pipe",
+    cwd: stage, encoding: "utf8", stdio: "pipe",
     shell: !useCli && process.platform === "win32",
   });
   if (r.status !== 0) {
@@ -276,8 +285,19 @@ function fetchClaudeCode(target) {
       : (r.stderr || r.stdout || "").trim().split("\n").slice(-3).join(" ")
         || `npm exited ${r.status}`;
     warn(`could not install Claude Code: ${why}`);
+    rmSync(stage, { recursive: true, force: true });
     return false;
   }
+  // npm can exit 0 with the postinstall having only warned, so confirm the
+  // package really landed before declaring the drive self-sufficient.
+  if (!existsSync(path.join(stage, "node_modules", "@anthropic-ai"))) {
+    warn("npm reported success but @anthropic-ai is missing from the install");
+    rmSync(stage, { recursive: true, force: true });
+    return false;
+  }
+  mkdirSync(dir, { recursive: true });
+  cpSync(stage, dir, { recursive: true });
+  rmSync(stage, { recursive: true, force: true });
   return true;
 }
 
@@ -335,9 +355,22 @@ function assembleWork(target) {
 
 // ─── static files ────────────────────────────────────────────────────────────
 
+/**
+ * Copy a single file onto the drive, replacing whatever is there.
+ *
+ * cpSync over an existing file on exFAT does not throw — it aborts the whole
+ * process with exit 127 and no error at all, so a --refresh died silently at
+ * the launcher step and left the manifest, README and launchers stale. Only
+ * the destination existing triggers it; unlinking first is enough.
+ */
+function copyOnto(src, dst) {
+  rmSync(dst, { force: true });
+  cpSync(src, dst);
+}
+
 function writeLaunchers(target) {
   const src = path.join(ROOT, "portable", "launchers");
-  cpSync(path.join(src, "Claudbot.cmd"), path.join(target, "Claudbot.cmd"));
+  copyOnto(path.join(src, "Claudbot.cmd"), path.join(target, "Claudbot.cmd"));
   const sh = readFileSync(path.join(src, "claudbot.sh"), "utf8");
   for (const name of ["claudbot.sh", "claudbot.command"]) {
     const dst = path.join(target, name);
@@ -408,7 +441,7 @@ function copyPortableMachinery(target) {
   // boot.mjs threw ERR_MODULE_NOT_FOUND before printing anything.
   for (const e of readdirSync(path.join(ROOT, "portable"), { withFileTypes: true })) {
     if (!e.isFile() || !e.name.endsWith(".mjs")) continue;
-    cpSync(path.join(ROOT, "portable", e.name), path.join(dst, e.name));
+    copyOnto(path.join(ROOT, "portable", e.name), path.join(dst, e.name));
   }
 }
 
