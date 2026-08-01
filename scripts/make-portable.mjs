@@ -386,7 +386,12 @@ function copyOnto(src, dst) {
 
 function writeLaunchers(target) {
   const src = path.join(ROOT, "portable", "launchers");
-  copyOnto(path.join(src, "Claudbot.cmd"), path.join(target, "Claudbot.cmd"));
+  // cmd.exe is not reliably LF-tolerant: the multi-line parenthesised blocks in
+  // Claudbot.cmd (the "no bundled runtime" fallback) can misparse when the file
+  // has no CR. The repo keeps it LF like everything else, so normalise on the
+  // way to the drive. The shell scripts must stay LF or bash breaks on them.
+  const cmd = readFileSync(path.join(src, "Claudbot.cmd"), "utf8");
+  writeFileSync(path.join(target, "Claudbot.cmd"), cmd.replace(/\r?\n/g, "\r\n"));
   const sh = readFileSync(path.join(src, "claudbot.sh"), "utf8");
   for (const name of ["claudbot.sh", "claudbot.command"]) {
     const dst = path.join(target, name);
