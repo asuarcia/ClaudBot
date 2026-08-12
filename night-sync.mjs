@@ -26,7 +26,7 @@ const VERBOSE = process.argv.includes("--verbose");
 try {
   const envPath = join(ROOT, ".env");
   if (existsSync(envPath)) {
-    for (const line of readFileSync(envPath, "utf8").split("\n")) {
+    for (const line of readFileSync(envPath, "utf8").split(/\r?\n/)) {
       const trimmed = line.trim();
       if (!trimmed || trimmed.startsWith("#")) continue;
       const eqIdx = trimmed.indexOf("=");

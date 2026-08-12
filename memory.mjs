@@ -88,7 +88,7 @@ function firstLine(text, max = 100) {
 function parseSession(file) {
   let lines;
   try {
-    lines = readFileSync(file, "utf8").split("\n").filter(Boolean);
+    lines = readFileSync(file, "utf8").split(/\r?\n/).filter(Boolean);
   } catch {
     return null;
   }
@@ -185,7 +185,7 @@ export function searchSessions(query, { limit = 8, cwd } = {}) {
     const session = parseSession(file);
     if (!session || session.background) continue;
     let lines = [];
-    try { lines = readFileSync(file, "utf8").split("\n").filter(Boolean); } catch { continue; }
+    try { lines = readFileSync(file, "utf8").split(/\r?\n/).filter(Boolean); } catch { continue; }
 
     let snippet = null;
     let count = 0;
@@ -341,7 +341,7 @@ if (runDirect && process.argv[2] === "index") {
   // .env loader (never overrides real env)
   const envPath = path.join(ROOT, ".env");
   if (existsSync(envPath)) {
-    for (const line of readFileSync(envPath, "utf8").split("\n")) {
+    for (const line of readFileSync(envPath, "utf8").split(/\r?\n/)) {
       const m = line.trim().match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
       if (m && !(m[1] in process.env)) process.env[m[1]] = m[2].trim();
     }

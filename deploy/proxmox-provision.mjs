@@ -28,7 +28,7 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 if (existsSync(path.join(ROOT, ".env"))) {
-  for (const line of readFileSync(path.join(ROOT, ".env"), "utf8").split("\n")) {
+  for (const line of readFileSync(path.join(ROOT, ".env"), "utf8").split(/\r?\n/)) {
     const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
     if (m && !process.env[m[1]]) process.env[m[1]] = m[2].trim();
   }

@@ -56,7 +56,7 @@ function tryRun(file, args = []) {
 
 function readEnvKey(key) {
   if (!existsSync(ENV_FILE)) return null;
-  const line = readFileSync(ENV_FILE, "utf8").split("\n").find((l) => l.startsWith(`${key}=`));
+  const line = readFileSync(ENV_FILE, "utf8").split(/\r?\n/).find((l) => l.startsWith(`${key}=`));
   return line ? line.slice(key.length + 1).trim() : null;
 }
 

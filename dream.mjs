@@ -29,7 +29,7 @@ const DREAM_LOG     = path.join(CLAUDBOT_ROOT, "dream-log.md");
 function loadDotEnv() {
   const envPath = path.join(ROOT, ".env");
   if (!existsSync(envPath)) return;
-  for (const line of readFileSync(envPath, "utf8").split("\n")) {
+  for (const line of readFileSync(envPath, "utf8").split(/\r?\n/)) {
     const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
     if (m && !process.env[m[1]]) process.env[m[1]] = m[2].trim();
   }
