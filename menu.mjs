@@ -39,6 +39,7 @@ const MENU_ITEMS = [
   { label: "📊 Dashboard",           desc: "morning command center on :4500",            action: "dashboard" },
   { label: "📰 Briefing",            desc: "build the news-to-learn digest",             action: "briefing" },
   { label: "💤 Dream",               desc: "run background tasks once",                  action: "dream" },
+  { label: "🧩 Widgets",             desc: "desktop widgets: status, notes, stocks, tasks", action: "widgets" },
   { label: "🌙 Night",               desc: "dream + briefing + dashboard bundle",        action: "night" },
   { label: "🩺 Doctor",              desc: "health check",                               action: "doctor" },
   { label: "⬆ Update",              desc: "pull latest + reinstall",                    action: "update" },

@@ -34,7 +34,7 @@ const NEWS_LOCAL = path.join(ROOT, "briefing", "data", "latest.json");
 function loadDotEnv() {
   const p = path.join(ROOT, ".env");
   if (!existsSync(p)) return;
-  for (const line of readFileSync(p, "utf8").split("\n")) {
+  for (const line of readFileSync(p, "utf8").split(/\r?\n/)) {
     const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
     if (m && !process.env[m[1]]) process.env[m[1]] = m[2].trim();
   }
@@ -50,6 +50,8 @@ const NOTION = {
   props: {
     title: process.env.NOTION_TITLE_PROP ?? "Name",
     done:  process.env.NOTION_DONE_PROP  ?? "Done",
+    // Optional: set NOTION_DUE_PROP="" for a database with no usable due date
+    // (Notion allows an unnamed date property, which can't be addressed).
     due:   process.env.NOTION_DUE_PROP   ?? "Due",
   },
 };
@@ -111,12 +113,66 @@ async function notion(method, pathname, body) {
   return text ? JSON.parse(text) : {};
 }
 
+/**
+ * The done flag can be either kind of Notion property.
+ *
+ * Older task databases use a checkbox; Notion's current task template ships a
+ * `status` property instead, with options grouped into to-do / in-progress /
+ * complete. They are different types, so no amount of renaming bridges them —
+ * we have to detect which one the database actually has.
+ *
+ * The schema is fetched once per sync and cached here. Null means "not looked
+ * up yet"; we fall back to checkbox if the lookup fails, which is the old
+ * behaviour.
+ */
+let doneSchema = null;
+
+async function loadDoneSchema() {
+  try {
+    const db = await notion("GET", `/databases/${NOTION.db}`);
+    const prop = db.properties?.[NOTION.props.done];
+    if (prop?.type === "status") {
+      const groups = prop.status?.groups ?? [];
+      const optionsById = new Map((prop.status?.options ?? []).map((o) => [o.id, o.name]));
+      const named = (groupName) => {
+        const g = groups.find((x) => x.name?.toLowerCase() === groupName);
+        return (g?.option_ids ?? []).map((id) => optionsById.get(id)).filter(Boolean);
+      };
+      // Notion names these groups "To-do", "In progress" and "Complete".
+      const complete = named("complete");
+      const todo = named("to-do");
+      doneSchema = {
+        type: "status",
+        // Fall back to the literal names Notion's template uses if a workspace
+        // has renamed the groups themselves.
+        doneName: complete[0] ?? "Done",
+        openName: todo[0] ?? "Not started",
+        completeNames: new Set(complete),
+      };
+      return;
+    }
+    doneSchema = { type: prop?.type === "checkbox" || !prop ? "checkbox" : prop.type };
+  } catch {
+    doneSchema = { type: "checkbox" }; // preserve the previous behaviour
+  }
+}
+
 function taskToProps(t) {
   const props = {
     [NOTION.props.title]: { title: [{ text: { content: t.title || "Untitled" } }] },
-    [NOTION.props.done]:  { checkbox: Boolean(t.done) },
   };
-  if (t.due) props[NOTION.props.due] = { date: { start: t.due } };
+
+  if (doneSchema?.type === "status") {
+    props[NOTION.props.done] = {
+      status: { name: t.done ? doneSchema.doneName : doneSchema.openName },
+    };
+  } else {
+    props[NOTION.props.done] = { checkbox: Boolean(t.done) };
+  }
+
+  // A due property is optional. Skip it when unnamed or absent rather than
+  // sending a "" key, which Notion rejects for the whole request.
+  if (t.due && NOTION.props.due) props[NOTION.props.due] = { date: { start: t.due } };
   return props;
 }
 
@@ -124,10 +180,18 @@ function propsToTask(page) {
   const p = page.properties ?? {};
   const titleProp = p[NOTION.props.title]?.title ?? [];
   const title = titleProp.map((x) => x.plain_text ?? x.text?.content ?? "").join("").trim();
+
+  const doneProp = p[NOTION.props.done];
+  // Read whichever type is actually present, so a schema change mid-flight
+  // can't silently mark everything as open.
+  const done = doneProp?.type === "status"
+    ? Boolean(doneProp.status?.name && doneSchema?.completeNames?.has(doneProp.status.name))
+    : Boolean(doneProp?.checkbox);
+
   return {
     title: title || "Untitled",
-    done: Boolean(p[NOTION.props.done]?.checkbox),
-    due: p[NOTION.props.due]?.date?.start ?? null,
+    done,
+    due: (NOTION.props.due && p[NOTION.props.due]?.date?.start) || null,
     notionId: page.id,
   };
 }
@@ -139,6 +203,10 @@ async function syncNotion() {
   const state = loadStore();
   let created = 0, updated = 0, imported = 0;
   try {
+    // Learn whether the done property is a checkbox or a status before writing
+    // anything — sending the wrong shape fails the entire request.
+    await loadDoneSchema();
+
     // Push
     for (const t of state.tasks) {
       if (t.notionId) {

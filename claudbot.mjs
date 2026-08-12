@@ -57,7 +57,7 @@ function loadDotEnv() {
   const envPath = path.join(ROOT, ".env");
   if (!existsSync(envPath)) return;
   try {
-    for (const line of readFileSync(envPath, "utf8").split("\n")) {
+    for (const line of readFileSync(envPath, "utf8").split(/\r?\n/)) {
       const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
       if (m && !process.env[m[1]]) process.env[m[1]] = m[2].trim();
     }
@@ -242,6 +242,9 @@ function cmdHelp() {
     briefing --watch   Rebuild the digest on a schedule
     dashboard          Serve the morning command center (http://localhost:4500)
     organizer          Open your assistant home — tasks, calendar & news (http://localhost:4700)
+    widgets            Feed the desktop widgets (status, post-it, stocks, tasks)
+    widgets install    Copy the Rainmeter skins into your skins folder
+    widgets uninstall  Remove the installed skins
     sync               Merge changes with your USB drive, both directions
     sync --drive <p>   Point at a specific drive instead of auto-detecting
     sync --yes         Apply without confirming
@@ -1129,6 +1132,7 @@ async function cmdMenu() {
       case "dashboard": return runScript("dashboard.mjs");
       case "briefing":  return runScript("briefing.mjs");
       case "dream":     return runScript("dream.mjs");
+      case "widgets":   return runScript("widgets/bridge.mjs", ["--watch"]);
       case "night":     return runScript("night.mjs");
       case "update":    return cmdUpdate();
       case "exit":
@@ -1163,6 +1167,11 @@ async function main() {
     case "briefing": return runScript("briefing.mjs", rest);
     case "dashboard":return runScript("dashboard.mjs", rest);
     case "organizer":return cmdOrganizer(rest);
+    // `widgets` runs the data feed; `widgets install` copies the skins into
+    // Rainmeter and generates this machine's paths.inc.
+    case "widgets":  return rest[0] === "install" || rest[0] === "uninstall"
+      ? runScript("widgets/install.mjs", rest[0] === "uninstall" ? ["--uninstall"] : [])
+      : runScript("widgets/bridge.mjs", rest.length ? rest : ["--watch"]);
     case "sync":     return cmdSync(rest);
     // Unadvertised on purpose: voice is fully built and still runs, it just
     // isn't in the menu or `help` output. Keep this route.

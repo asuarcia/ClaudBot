@@ -7,7 +7,7 @@
  * endpoint. Keeps no state; each call is a fresh context for that agent.
  */
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { parse as yamlParse } from "yaml";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,6 +18,7 @@ const CLAUDBOT_ROOT = path.join(
   ".claudbot"
 );
 const REGISTRY_PATH = path.join(CLAUDBOT_ROOT, "agents.yaml");
+const USAGE_PATH    = path.join(CLAUDBOT_ROOT, "usage.json");
 
 // Safe agent name: lowercase letters, numbers, hyphens only.
 const SAFE_NAME = /^[a-z0-9-]{1,64}$/;
@@ -99,6 +100,41 @@ export function sanitizeAgentOutput(text, maxChars = agentMaxOutputChars()) {
   return s;
 }
 
+/**
+ * Record one agent call against today's tally in .claudbot/usage.json.
+ *
+ * Rolling 30-day window, keyed by local date then agent name. This is the only
+ * place Claudbot has ever counted tokens — the endpoints return an
+ * OpenAI-compatible `usage` block on every response and it used to be dropped
+ * on the floor. The desktop Status widget reads this file.
+ *
+ * Deliberately best-effort and swallowed: metering must never be able to fail
+ * a call that already succeeded.
+ */
+function recordUsage(name, usage) {
+  try {
+    const day = new Date().toISOString().slice(0, 10);
+    let db = { days: {} };
+    if (existsSync(USAGE_PATH)) {
+      try { db = JSON.parse(readFileSync(USAGE_PATH, "utf8")) ?? db; } catch { /* start fresh */ }
+    }
+    db.days ??= {};
+    const agents = (db.days[day] ??= { agents: {} }).agents ??= {};
+    const a = (agents[name] ??= { calls: 0, promptTokens: 0, completionTokens: 0 });
+    a.calls += 1;
+    a.promptTokens     += Number(usage?.prompt_tokens) || 0;
+    a.completionTokens += Number(usage?.completion_tokens) || 0;
+
+    for (const d of Object.keys(db.days).sort().slice(0, -30)) delete db.days[d];
+
+    // Atomic: the widget bridge polls this file and must never read a partial write.
+    mkdirSync(CLAUDBOT_ROOT, { recursive: true });
+    const tmp = `${USAGE_PATH}.tmp`;
+    writeFileSync(tmp, JSON.stringify(db, null, 2));
+    renameSync(tmp, USAGE_PATH);
+  } catch { /* metering is never worth failing a successful call over */ }
+}
+
 export async function runAgent(name, prompt, systemPrompt) {
   const agent = findAgent(name);
 
@@ -144,6 +180,7 @@ export async function runAgent(name, prompt, systemPrompt) {
   }
 
   const data = await res.json();
+  recordUsage(name, data?.usage);
   const content = data?.choices?.[0]?.message?.content;
   if (!content) throw new Error(`Agent "${name}" returned an empty response.`);
   const clean = sanitizeAgentOutput(content);

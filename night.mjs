@@ -28,7 +28,7 @@ const ROOT = path.dirname(fileURLToPath(import.meta.url));
 function loadDotEnv() {
   const p = path.join(ROOT, ".env");
   if (!existsSync(p)) return;
-  for (const line of readFileSync(p, "utf8").split("\n")) {
+  for (const line of readFileSync(p, "utf8").split(/\r?\n/)) {
     const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
     if (m && !process.env[m[1]]) process.env[m[1]] = m[2].trim();
   }
@@ -47,6 +47,9 @@ const PROCS = [
   { name: "dream",     script: "dream.mjs",     args: ["--watch"] },
   { name: "briefing",  script: "briefing.mjs",  args: ["--watch"] },
   { name: "dashboard", script: "dashboard.mjs", args: ["--port", String(port)], skip: noDashboard },
+  // Desktop-only: the widget feed is pointless on a headless box, and it's the
+  // same condition that hides the dashboard.
+  { name: "widgets",   script: "widgets/bridge.mjs", args: ["--watch"], skip: noDashboard },
 ].filter((p) => !p.skip && (!only || only.includes(p.name)));
 
 const C = { reset: "\x1b[0m", dim: "\x1b[2m", cyan: "\x1b[36m", green: "\x1b[32m", yellow: "\x1b[33m", red: "\x1b[31m" };
