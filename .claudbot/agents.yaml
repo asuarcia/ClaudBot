@@ -10,63 +10,44 @@
 #   apiKeyEnv   - env var holding the API key (null for local endpoints)
 #   jobDescription - what this agent is good at (guides Claude's routing)
 #
-# Models verified against the live build.nvidia.com/models catalog
-# (2026-06-29). All run on the NVIDIA NIM OpenAI-compatible endpoint.
+# Models verified against the live build.nvidia.com/models catalog by calling
+# each one (2026-08-15). All run on the NVIDIA NIM OpenAI-compatible endpoint.
+#
+# Re-verify after any long gap. On 2026-08-15 three of seven agents were dead
+# and every delegation to them failed: NVIDIA retired both DeepSeek V4 models on
+# 2026-08-07 (HTTP 410 "reached its end of life"), and Google cut Gemini CLI off
+# for individual accounts. A registry entry that 404s is worse than a missing
+# one — it costs a call and a retry before anything else can be tried.
 # ------------------------------------------------------------------
 
 agents:
   - name: coder
-    model: deepseek-ai/deepseek-v4-pro
+    # Was deepseek-v4-pro until NVIDIA retired it (410) on 2026-08-07. This dated
+    # pin of V4 Flash is the strongest DeepSeek still served, and at ~2.5s for a
+    # short answer it is by far the fastest of the live coding-capable models —
+    # glm-5.2 and gpt-oss-120b both answered the same prompt but took 38s and
+    # 81s, which is too slow to sit behind an interactive delegation.
+    model: deepseek-ai/deepseek-v4-flash-0731
     endpoint: https://integrate.api.nvidia.com/v1
     apiKeyEnv: NIM_API_KEY
     jobDescription: >
-      Writing, reviewing, refactoring, and debugging code (DeepSeek V4 Pro —
-      strongest coding model in the catalog). Best for: implementing features,
-      fixing bugs, non-trivial refactors, code review, and technical problem
-      solving. Give it the full code/context it needs — it has no prior
-      conversation history.
-
-  # Default for research and deep-web work. Runs through the Gemini CLI rather
-  # than the API: CLI auth is an OAuth login against the Google AI Pro
-  # subscription, so it costs nothing per call and reaches Pro-tier models that
-  # left the API free tier on 2026-04-01. `-p` forces headless mode, the real
-  # prompt arrives on stdin, `plan` keeps it read-only, and `--skip-trust` stops
-  # the approval mode from being downgraded to interactive (which would hang).
-  # If the CLI is missing or logged out, this falls back to the HTTP endpoint
-  # below whenever GEMINI_API_KEY is set.
-  - name: gemini
-    transport: cli
-    command: gemini
-    stdin: true
-    args:
-      - "-p"
-      - "Follow the instructions provided on stdin."
-      - "-o"
-      - "text"
-      - "--approval-mode"
-      - "plan"
-      - "--skip-trust"
-    model: gemini-cli (best model your plan allows)
-    endpoint: https://generativelanguage.googleapis.com/v1beta/openai
-    apiKeyEnv: GEMINI_API_KEY
-    jobDescription: >
-      Research and deep-web work — the default for anything investigative
-      (Gemini CLI, with live web access). Best for: web and topic research,
-      current events, literature review, comparing options, trade-off analysis,
-      and fact-checking. Prefer this over `researcher`, which is slower and
-      times out on large prompts. Falls back to `researcher` if the Gemini CLI
-      is not logged in and GEMINI_API_KEY is not set.
+      Writing, reviewing, refactoring, and debugging code (DeepSeek V4 Flash —
+      the strongest coding model still served on this account). Best for:
+      implementing features, fixing bugs, non-trivial refactors, code review,
+      and technical problem solving. Give it the full code/context it needs — it
+      has no prior conversation history.
 
   - name: researcher
     model: nvidia/nemotron-3-ultra-550b-a55b
     endpoint: https://integrate.api.nvidia.com/v1
     apiKeyEnv: NIM_API_KEY
     jobDescription: >
-      FALLBACK research agent — use `gemini` first. Deep reasoning, planning and
-      summarization (Nemotron 3 Ultra, 550B MoE). Best for: multi-step
-      reasoning, architecture and project planning, trade-off analysis. Returns
-      well-structured markdown. Warning: on large prompts this regularly exceeds
-      the MCP request cap, so do not route latency-sensitive work here.
+      Deep reasoning, planning and summarization (Nemotron 3 Ultra, 550B MoE).
+      Best for: multi-step reasoning, architecture and project planning,
+      trade-off analysis. Returns well-structured markdown. Two warnings: it has
+      no web access, so live-web research belongs in Claude's own WebSearch, not
+      here; and on large prompts it regularly exceeds the MCP request cap, so do
+      not route latency-sensitive work to it.
 
   - name: fast
     model: nvidia/nemotron-3-nano-omni-30b-a3b-reasoning
@@ -80,16 +61,20 @@ agents:
       light.
 
   - name: agent
-    # kimi-k2.6 went 404 for this account 2026-07-09 (persisted >2h); swapped to
-    # the current-gen mid-size Nemotron, verified live. Restore kimi if it returns.
+    # kimi-k2.6 went 404 for this account 2026-07-09 and was still 404 on
+    # 2026-08-15; swapped to the current-gen mid-size Nemotron, verified live.
+    # Restore kimi if it ever comes back — it is listed in the catalog but not
+    # served to this account, so listing it is not evidence it works.
     model: nvidia/nemotron-3-super-120b-a12b
     endpoint: https://integrate.api.nvidia.com/v1
     apiKeyEnv: NIM_API_KEY
     jobDescription: >
-      Agentic, multi-step tool-use and automation (Kimi K2.6 — strong agentic
-      + coding hybrid). Best for: designing and reasoning through automation
-      workflows, multi-tool task plans, scripting that requires dynamic
-      decision-making, and agentic coding tasks that mix reasoning with code.
+      Agentic, multi-step tool-use and automation (Nemotron 3 Super, 120B-a12b).
+      Best for: designing and reasoning through automation workflows, multi-tool
+      task plans, and scripting that needs dynamic decision-making. It is a
+      reasoning model and spends tokens thinking before it answers, so give it
+      room — a long task with a tight completion cap returns reasoning and no
+      result. For plain code, prefer `coder`.
 
   - name: vision
     model: nvidia/nemotron-nano-12b-v2-vl
@@ -104,11 +89,17 @@ agents:
       calls.
 
   - name: longcontext
-    model: deepseek-ai/deepseek-v4-flash
+    # Same model as `coder`, and deliberately so. The undated
+    # deepseek-v4-flash alias was retired with v4-pro on 2026-08-07; this dated
+    # pin is the same weights and the only large-context model left on this
+    # account. Two names for one endpoint is worth keeping — the roster is how
+    # routing decisions get made, and collapsing the two roles into one name
+    # would lose the distinction rather than record that it has narrowed.
+    model: deepseek-ai/deepseek-v4-flash-0731
     endpoint: https://integrate.api.nvidia.com/v1
     apiKeyEnv: NIM_API_KEY
     jobDescription: >
       Large-context analysis (DeepSeek V4 Flash — 284B MoE, 1M-token context,
       fast). Best for: analyzing long documents, reviewing or sweeping large
       codebases, log/transcript analysis, and any task where the input is too
-      big for the other agents. Also a fast fallback for coding/agentic work.
+      big for the other agents.

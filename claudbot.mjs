@@ -608,11 +608,14 @@ function watchForRateLimit(cwd, sinceMs, onDetected) {
   return () => { stopped = true; clearInterval(timer); };
 }
 
-// After hard-killing the TUI, put the terminal back into a sane state (leave the
-// alternate screen, restore the cursor, drop raw mode) before the NIM REPL.
-function resetTerminal() {
-  try { if (process.stdin.isTTY) process.stdin.setRawMode(false); } catch { /* ignore */ }
-  process.stdout.write("\x1b[?1049l\x1b[?25h\x1b[0m\n");
+// After hard-killing the TUI, put the terminal back into a state a line-based
+// REPL can use, and throw away the escape sequences that were still arriving
+// while it happened. See terminal.mjs — undoing only the visible modes left the
+// keyboard protocol on, which turned every keypress into `\x1b[97;1u` on screen.
+async function resetTerminal() {
+  const { restoreTerminal, drainStdin } = await import("./terminal.mjs");
+  restoreTerminal();
+  await drainStdin();
 }
 
 // ─── NIM fallback REPL ───────────────────────────────────────────────────────
@@ -772,7 +775,12 @@ async function nimRepl() {
         }
         continue; // feed results back to the model
       }
-      text = msg.content ?? "";
+      // Every model the fallback can run on is a reasoning model, and they emit
+      // <think> traces that can dwarf the answer. runAgent() has always stripped
+      // them; this path called the provider directly and printed them raw, so a
+      // reply arrived as a screenful of the model talking itself through the
+      // problem before the answer.
+      text = agents.sanitizeAgentOutput(msg.content ?? "");
       break;
     }
     return text;
@@ -967,7 +975,7 @@ async function cmdStart(argv, { project = null } = {}) {
 
       // Usage limit detected mid-session — fall back regardless of exit code/signal
       if (rateLimited) {
-        resetTerminal();
+        await resetTerminal();
         return nimRepl();
       }
 
@@ -977,7 +985,10 @@ async function cmdStart(argv, { project = null } = {}) {
       // Clean exit — user typed /exit or Ctrl+C
       if (signal === "SIGINT" || code === 0) process.exit(0);
 
-      // Unexpected exit — rate limit or error, fall back to NIM
+      // Unexpected exit — rate limit or error, fall back to NIM.
+      // This path used to skip the reset entirely, which left the REPL running
+      // inside the alternate screen with the TUI's input modes still active.
+      await resetTerminal();
       console.log(`\n[claudbot] Claude Code exited (code ${code}). Switching to NIM fallback…`);
       await nimRepl();
     });

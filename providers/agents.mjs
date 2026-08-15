@@ -135,6 +135,21 @@ function recordUsage(name, usage) {
   } catch { /* metering is never worth failing a successful call over */ }
 }
 
+/**
+ * Statuses worth trying again, and the ones that are final.
+ *
+ * 429 and 5xx are the endpoint being busy — NVIDIA returns 529 "Service
+ * temporarily overloaded" under load, and a request that fails that way
+ * succeeds seconds later. 4xx other than 429 is our mistake and will fail
+ * identically forever: 410 means the model was retired, 401 means the key is
+ * wrong. Retrying those wastes the caller's time and hides the real message.
+ */
+const RETRYABLE = (status) => status === 429 || (status >= 500 && status < 600);
+
+/** Attempts, and how long to wait between them. Doubling, from one second. */
+const RETRIES = 3;
+const backoffMs = (attempt) => 1000 * 2 ** (attempt - 1);
+
 export async function runAgent(name, prompt, systemPrompt) {
   const agent = findAgent(name);
 
@@ -152,31 +167,41 @@ export async function runAgent(name, prompt, systemPrompt) {
   if (system) messages.push({ role: "system", content: system });
   messages.push({ role: "user", content: prompt });
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), agentTimeoutMs());
-  let res;
-  try {
-    res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({ model: agent.model, messages, max_tokens: agentMaxTokens(agent) }),
-      signal: controller.signal,
-    });
-  } catch (err) {
-    if (err.name === "AbortError") {
-      throw new Error(`Agent "${name}" timed out after ${agentTimeoutMs() / 1000}s.`);
-    }
-    throw err;
-  } finally {
-    clearTimeout(timer);
-  }
+  const body = JSON.stringify({ model: agent.model, messages, max_tokens: agentMaxTokens(agent) });
 
-  if (!res.ok) {
-    const body = await res.text().catch(() => "(no body)");
-    throw new Error(`Agent "${name}" HTTP ${res.status}: ${body}`);
+  let res;
+  for (let attempt = 1; ; attempt++) {
+    // A fresh controller per attempt: an aborted one stays aborted, so reusing
+    // it would make every retry fail instantly with the first attempt's timeout.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), agentTimeoutMs());
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body,
+        signal: controller.signal,
+      });
+    } catch (err) {
+      if (err.name === "AbortError") {
+        throw new Error(`Agent "${name}" timed out after ${agentTimeoutMs() / 1000}s.`);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (res.ok) break;
+    if (attempt >= RETRIES || !RETRYABLE(res.status)) {
+      const text = await res.text().catch(() => "(no body)");
+      throw new Error(`Agent "${name}" HTTP ${res.status}: ${text}`);
+    }
+    // Drain the body before the next attempt so the connection can be reused.
+    await res.text().catch(() => {});
+    await new Promise((r) => setTimeout(r, backoffMs(attempt)));
   }
 
   const data = await res.json();

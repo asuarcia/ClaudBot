@@ -15,6 +15,7 @@
     "dream:watch": "node dream.mjs --watch",
     "voice":    "node voice.mjs",
     "screen":   "node screen.mjs",
+    "test":     "node --test test/*.test.mjs forge/test/*.test.mjs",
     "check":    "node scripts/check-cost-routing.mjs && node scripts/check-portable.mjs",
     "check:portable": "node scripts/check-portable.mjs",
     "make-portable":  "node scripts/make-portable.mjs"
