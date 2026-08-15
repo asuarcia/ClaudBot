@@ -29,6 +29,7 @@ do something else. None of them may invoke the `claude` binary.
 | `screen.mjs` | 5-minute heartbeat | `vision` | `CLAUDBOT_SCREEN_AGENT` |
 | `organizer.mjs` | web server on :4700 | *(no inference)* | — |
 | `dashboard.mjs` | web server on :4500 | *(no inference)* | — |
+| `widgets/bridge.mjs` | poll loop feeding the desktop widgets | *(no inference — Finnhub + local files)* | — |
 | `channel-server.mjs` | inbound WhatsApp / Telegram | `agent` | `CLAUDBOT_FALLBACK_AGENT` |
 
 Every one of these goes through `providers/agents.mjs → runAgent()`, which reads
@@ -69,7 +70,7 @@ line item in the whole system, and it would be spent on frames that mostly say
 
 | Agent | Model | Used for |
 |---|---|---|
-| `gemini` | `gemini-3.6-flash` | **default for research / deep-web** |
+| `gemini` | Gemini CLI (OAuth) | **default for research / deep-web** |
 | `researcher` | `nvidia/nemotron-3-ultra-550b-a55b` | research fallback, planning |
 | `coder` | `deepseek-ai/deepseek-v4-pro` | writing and reviewing code |
 | `fast` | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | summaries, classification, extraction |
@@ -87,15 +88,39 @@ Two reasons it goes ahead of `researcher`:
 - **Freshness.** Research questions are usually about the current state of the
   world, which is Gemini's strength.
 
-`researcher` stays registered as the fallback for when `GEMINI_API_KEY` is not
-set, and for deep reasoning where latency does not matter.
+`researcher` stays registered as the fallback for when Gemini is unavailable,
+and for deep reasoning where latency does not matter.
 
-**Setup:** put `GEMINI_API_KEY=...` in `.env` (never in `agents.yaml` — the
-registry stores the env var *name*, never a value). The endpoint is Google's
-OpenAI-compatible one, so it needs no new client code.
+### Gemini runs through the CLI, not the API
 
-Want more depth than Flash? Change `model:` in `agents.yaml` to a Pro-tier id
-and accept the latency; nothing else has to change.
+The Gemini API is metered per token, and Pro-tier models left its free tier on
+2026-04-01 — so the API route means either paying or being capped at Flash. The
+CLI is a different door onto the same models: it authenticates with an OAuth
+login against a Google AI Pro subscription, which is a flat monthly price the
+user already pays. Marginal cost per research call is therefore zero, the quota
+is ~1,500 requests/day, and Pro-tier models are in scope again.
+
+That is why `claudbot-exec` grew a `transport: cli` mode. The agent is spawned
+as a subprocess instead of POSTed to:
+
+- `-p` forces headless mode; the real prompt goes in on **stdin**, which keeps
+  untrusted text out of `argv` and dodges the ~32k Windows command-line limit.
+- `--approval-mode plan` keeps the CLI read-only — a research agent has no
+  business editing files — and `--skip-trust` stops that mode from being
+  silently downgraded to interactive, which would hang a headless run forever.
+- `spawn` runs with `shell: false`, always. On Windows npm installs JS bins as
+  `.cmd` shims that `spawn` cannot execute, so `resolveCliCommand()` unwraps the
+  shim and runs the real `.js` under the current node binary rather than
+  reaching for a shell.
+
+**Setup:** `npm install -g @google/gemini-cli`, then run `gemini` once and
+complete the browser login with the account holding the subscription. Auth is
+cached in `~/.gemini/`; every later call is non-interactive.
+
+`GEMINI_API_KEY` is now optional. If it is set, the HTTP endpoint stays as an
+automatic fallback for when the CLI is missing or logged out — keep the key in
+`.env`, never in `agents.yaml` (the registry stores the env var *name*, never a
+value).
 
 ---
 

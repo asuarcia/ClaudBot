@@ -26,21 +26,36 @@ agents:
       solving. Give it the full code/context it needs — it has no prior
       conversation history.
 
-  # Default for research and deep-web work. Gemini is fast enough to finish
-  # inside the MCP request cap, which the NIM reasoning models routinely are not
-  # (see `researcher` below). Swap the model for a Pro-tier id if you want more
-  # depth and can live with the latency.
+  # Default for research and deep-web work. Runs through the Gemini CLI rather
+  # than the API: CLI auth is an OAuth login against the Google AI Pro
+  # subscription, so it costs nothing per call and reaches Pro-tier models that
+  # left the API free tier on 2026-04-01. `-p` forces headless mode, the real
+  # prompt arrives on stdin, `plan` keeps it read-only, and `--skip-trust` stops
+  # the approval mode from being downgraded to interactive (which would hang).
+  # If the CLI is missing or logged out, this falls back to the HTTP endpoint
+  # below whenever GEMINI_API_KEY is set.
   - name: gemini
-    model: gemini-3.6-flash
+    transport: cli
+    command: gemini
+    stdin: true
+    args:
+      - "-p"
+      - "Follow the instructions provided on stdin."
+      - "-o"
+      - "text"
+      - "--approval-mode"
+      - "plan"
+      - "--skip-trust"
+    model: gemini-cli (best model your plan allows)
     endpoint: https://generativelanguage.googleapis.com/v1beta/openai
     apiKeyEnv: GEMINI_API_KEY
     jobDescription: >
       Research and deep-web work — the default for anything investigative
-      (Gemini, OpenAI-compatible endpoint). Best for: web and topic research,
+      (Gemini CLI, with live web access). Best for: web and topic research,
       current events, literature review, comparing options, trade-off analysis,
       and fact-checking. Prefer this over `researcher`, which is slower and
-      times out on large prompts. Falls back to `researcher` if GEMINI_API_KEY
-      is not set.
+      times out on large prompts. Falls back to `researcher` if the Gemini CLI
+      is not logged in and GEMINI_API_KEY is not set.
 
   - name: researcher
     model: nvidia/nemotron-3-ultra-550b-a55b
