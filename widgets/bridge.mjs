@@ -31,6 +31,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import { appDir } from "../portable/paths.mjs";
+import { livePid, claimPidFile } from "./pidfile.mjs";
 
 const ROOT       = appDir();
 const STATE_DIR  = path.join(ROOT, ".claudbot");
@@ -38,6 +39,7 @@ const OUT_DIR    = path.join(STATE_DIR, "widgets");
 const ORGANIZER  = path.join(STATE_DIR, "organizer.json");
 const USAGE      = path.join(STATE_DIR, "usage.json");
 const WATCHLIST  = path.join(OUT_DIR, "watchlist.json");
+const PIDFILE    = path.join(OUT_DIR, "bridge.pid");
 const NEWS_VM    = path.join(STATE_DIR, "briefing.nuc.json");
 const NEWS_LOCAL = path.join(ROOT, "briefing", "data", "latest.json");
 const DREAM_LOG  = path.join(STATE_DIR, "dream-log.md");
@@ -564,6 +566,18 @@ const INTERVALS = {
 
 async function watch() {
   mkdirSync(OUT_DIR, { recursive: true });
+
+  // One feed at a time. `claudbot widgets`, `claudbot night` and the logon task
+  // from widgets/autostart.mjs all launch this, and a second copy would just
+  // burn a second set of Finnhub calls writing the same numbers. Exiting 0 says
+  // "declined on purpose" — night.mjs reads that and won't restart us.
+  const other = livePid(PIDFILE);
+  if (other) {
+    console.log(`[widgets] already running (pid ${other}) — nothing to do`);
+    return;
+  }
+  claimPidFile(PIDFILE);
+
   console.log(`[widgets] writing to ${OUT_DIR}`);
   console.log(`[widgets] finnhub ${FINNHUB_KEY ? "configured" : "NOT configured (stocks will show 'no key')"}`);
   console.log(`[widgets] notion  ${process.env.NOTION_API_KEY && NOTION_DB ? "configured" : "NOT configured (todo is local-only)"}`);

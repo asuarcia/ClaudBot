@@ -5,6 +5,8 @@ Rainmeter desktop widgets for Claudbot. Full documentation: [`docs/widgets.md`](
 ```
 bridge.mjs              data pump — polls, writes .claudbot/widgets/*.txt, handles click actions
 install.mjs             copies skins into Rainmeter and generates paths.inc for this machine
+autostart.mjs           logon task that brings Rainmeter + the feed back after a reboot
+pidfile.mjs             one-feed-at-a-time guard shared by the bridge and the supervisor
 skins/Claudbot/
   @Resources/
     common.inc          shared palette and type — edit to restyle all four at once
@@ -19,8 +21,8 @@ skins/Claudbot/
 
 ```powershell
 winget install --id Rainmeter.Rainmeter -e
-claudbot widgets install
-claudbot widgets
+claudbot widgets install       # copy the skins in
+claudbot widgets autostart     # start them now, and at every logon from here on
 ```
 
 ## Adding a widget

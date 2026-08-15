@@ -14,7 +14,7 @@ renders on your desktop.
 ```powershell
 winget install --id Rainmeter.Rainmeter -e
 claudbot widgets install     # copy the skins + generate this machine's paths
-claudbot widgets             # start the data feed (leave it running)
+claudbot widgets autostart   # start them now, and at every logon from here on
 ```
 
 Then right-click the Rainmeter tray icon → **Refresh all**, and load
@@ -23,8 +23,105 @@ Then right-click the Rainmeter tray icon → **Refresh all**, and load
 `claudbot widgets install` is safe to re-run; do it again after moving or
 renaming the Claudbot checkout.
 
-The feed also starts automatically as part of `claudbot night`, so if you
-already run night mode you don't need a separate process.
+If you'd rather run the feed in a terminal you can watch, `claudbot widgets`
+does that instead. It also starts automatically as part of `claudbot night`.
+Only one copy ever runs — see [One feed at a time](#one-feed-at-a-time).
+
+---
+
+## Surviving a reboot
+
+Nothing about Rainmeter or the feed is persistent on its own. Rainmeter is an
+ordinary application that has to be launched, and the feed is an ordinary
+process that dies with its terminal. After a restart you get a bare desktop
+until you start both by hand.
+
+```powershell
+claudbot widgets autostart             # register it (and start them right now)
+claudbot widgets autostart status      # what's registered, what's running
+claudbot widgets autostart uninstall   # stop doing that
+```
+
+This registers one Scheduled Task, `\Claudbot\Widgets`, which runs a supervisor
+that starts whichever of the two isn't already up:
+
+```
+logon +30s ─┐
+            ├──> supervisor ──> Rainmeter.exe not running?  start it
+every 15min ┘                └─> bridge.mjs not running?     start it
+```
+
+It's a supervisor rather than two "launch this program" shortcuts so that a
+crashed feed, or a Rainmeter you exited by accident, comes back on the next
+tick instead of staying gone until the next reboot. Both checks are cheap and
+the whole pass exits in well under a second.
+
+The 30-second logon delay lets the desktop finish coming up first — Rainmeter
+draws onto the shell, and starting it while Explorer is still settling is how
+skins end up in the wrong place.
+
+Rainmeter restores whichever skins were loaded when it last closed (it keeps an
+`Active=1` line per skin in `Rainmeter.ini`), so the supervisor deliberately
+does **not** force the four Claudbot skins back on. Closing one has to mean
+something.
+
+### Why a VBScript shim is involved
+
+A Scheduled Task action that runs `node.exe` directly puts a console window on
+your desktop at every logon. The task's **Hidden** setting does not prevent it —
+that flag hides the *task* in the Task Scheduler UI, not the window. Measured on
+Windows 11 build 26200:
+
+| Task action | Console window? |
+|---|---|
+| `node.exe bridge.mjs` | **visible** |
+| `node.exe` with the task's `Hidden` setting | **visible** |
+| `powershell -WindowStyle Hidden` → `Start-Process -WindowStyle Hidden` | **visible** (PowerShell's own window flashes) |
+| `wscript.exe autostart.vbs` | none |
+| `conhost.exe --headless node.exe …` | none |
+
+So the task runs `wscript.exe` against a generated one-line `autostart.vbs`,
+which starts the supervisor with window style `0`. `wscript` is the primary
+because it is documented and unchanged for decades; `conhost --headless` is the
+automatic fallback for a machine without it, since VBScript is a Feature on
+Demand as of Windows 11 24H2 and is on Microsoft's deprecation path.
+
+`autostart.vbs` and `autostart.xml` (the task definition) are generated into
+`.claudbot/widgets/` at install time and are gitignored, for the same reason
+`paths.inc` is: they contain this machine's absolute paths.
+
+### No admin required
+
+The task is registered under `\Claudbot\` rather than the Task Scheduler root.
+Creating a task in the root folder needs elevation; creating one in a subfolder
+does not. Running whether-you-are-logged-on-or-not (`S4U`) would also avoid the
+window entirely, but *that* needs elevation, so it isn't used.
+
+To see or remove the task by hand: Task Scheduler → **Task Scheduler Library ▸
+Claudbot ▸ Widgets**.
+
+### One feed at a time
+
+Three things can start `bridge.mjs --watch`: `claudbot widgets`, `claudbot
+night`, and the logon task. Two at once wouldn't corrupt anything — every write
+is atomic — but it doubles the Finnhub calls against a free-tier key.
+
+So the bridge claims `.claudbot/widgets/bridge.pid` on start, and a second copy
+prints `already running (pid N)` and exits 0. The pid check also matches the
+process image name, not just the pid, because Windows recycles pids and a stale
+file would otherwise eventually name some unrelated live process — convincing
+the supervisor the feed was healthy forever.
+
+Night mode understands that exit: a `--watch` child that exits 0 within five
+seconds declined to start rather than crashed, so it isn't restarted on a
+backoff loop.
+
+### Logs
+
+The supervisor runs with no console, so it writes to
+`.claudbot/widgets/autostart.log`, and hands the bridge's stdout and stderr to
+`.claudbot/widgets/bridge.log`. Both are trimmed to the most recent 128 KB.
+`claudbot widgets autostart status` prints the last few lines of the first.
 
 ---
 
@@ -182,6 +279,9 @@ not instantly. Hit **sync** on the widget to force one.
 
 | Symptom | Cause |
 |---|---|
+| Nothing on the desktop after a reboot | Autostart isn't registered — `claudbot widgets autostart` |
+| Widgets there, but only when no window covers the desktop | Expected: skins sit on the desktop layer (`AlwaysOnTop=-2`). Right-click a skin → **Settings ▸ Position** to change it |
+| Registered, but still nothing after a reboot | `claudbot widgets autostart status`, then read `.claudbot/widgets/autostart.log` |
 | `bridge not running` in a header | `claudbot widgets` isn't running |
 | Skins don't appear in Rainmeter | Wrong skins folder. The installer reads `SkinPath` from `Rainmeter.ini`; override with `RAINMETER_SKINS` |
 | Garbled characters (`â—‹`) | An installed skin file isn't UTF-16. Re-run `claudbot widgets install` |

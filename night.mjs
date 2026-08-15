@@ -59,6 +59,7 @@ const children = new Map();
 let shuttingDown = false;
 
 function launch(proc, backoffMs = 1000) {
+  const startedAt = Date.now();
   const child = spawn("node", [path.join(ROOT, proc.script), ...proc.args], {
     cwd: ROOT,
     env: process.env,
@@ -80,6 +81,16 @@ function launch(proc, backoffMs = 1000) {
     children.delete(proc.name);
     if (shuttingDown) return;
     const why = signal ? `signal ${signal}` : `code ${code}`;
+
+    // A --watch process that exits 0 almost immediately didn't crash — it
+    // declined to start. The widget feed does exactly this when another copy
+    // already holds its pid file (started by `claudbot widgets` or the logon
+    // task). Restarting it on a backoff would loop forever to no purpose.
+    if (code === 0 && !signal && Date.now() - startedAt < 5000) {
+      console.log(`${tag(proc.name)} ${C.dim}already running elsewhere — not supervising it${C.reset}`);
+      return;
+    }
+
     // Clean exit of a one-shot is fine; but these are --watch/servers, so any
     // exit is unexpected — relaunch with capped exponential backoff.
     const next = Math.min(backoffMs * 2, 60_000);

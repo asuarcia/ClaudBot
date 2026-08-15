@@ -245,6 +245,9 @@ function cmdHelp() {
     widgets            Feed the desktop widgets (status, post-it, stocks, tasks)
     widgets install    Copy the Rainmeter skins into your skins folder
     widgets uninstall  Remove the installed skins
+    widgets autostart  Bring the widgets back automatically at every logon
+      status           Show what's registered and what's running
+      uninstall        Stop starting them at logon
     sync               Merge changes with your USB drive, both directions
     sync --drive <p>   Point at a specific drive instead of auto-detecting
     sync --yes         Apply without confirming
@@ -1168,10 +1171,14 @@ async function main() {
     case "dashboard":return runScript("dashboard.mjs", rest);
     case "organizer":return cmdOrganizer(rest);
     // `widgets` runs the data feed; `widgets install` copies the skins into
-    // Rainmeter and generates this machine's paths.inc.
-    case "widgets":  return rest[0] === "install" || rest[0] === "uninstall"
-      ? runScript("widgets/install.mjs", rest[0] === "uninstall" ? ["--uninstall"] : [])
-      : runScript("widgets/bridge.mjs", rest.length ? rest : ["--watch"]);
+    // Rainmeter and generates this machine's paths.inc; `widgets autostart`
+    // registers the logon task that brings both back after a reboot.
+    case "widgets":
+      if (rest[0] === "autostart") return runScript("widgets/autostart.mjs", rest.slice(1));
+      if (rest[0] === "install" || rest[0] === "uninstall") {
+        return runScript("widgets/install.mjs", rest[0] === "uninstall" ? ["--uninstall"] : []);
+      }
+      return runScript("widgets/bridge.mjs", rest.length ? rest : ["--watch"]);
     case "sync":     return cmdSync(rest);
     // Unadvertised on purpose: voice is fully built and still runs, it just
     // isn't in the menu or `help` output. Keep this route.
