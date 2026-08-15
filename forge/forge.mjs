@@ -130,9 +130,9 @@ async function cmdMake(args) {
 function viewerFor(part, opts, dir = null) {
   const into = dir ?? path.join(part.dir ?? path.dirname(part.stl), "view");
   const args = { name: part.name, printer: ENDER3_PRO };
-  return opts["no-open"]
-    ? writeViewer(part.stl, into, args)
-    : showViewer(part.stl, into, args);
+  if (opts["no-open"]) return writeViewer(part.stl, into, args);
+  part.opened = true;
+  return showViewer(part.stl, into, args);
 }
 
 function report(part, res) {
@@ -155,7 +155,9 @@ function report(part, res) {
   console.log(`  stl     ${part.stl}`);
   if (part.step) console.log(`  step    ${part.step}`);
   console.log(`  source  ${part.source}`);
-  if (part.viewer) console.log(`  view    ${part.viewer}`);
+  if (part.viewer) {
+    console.log(`  view    ${part.viewer}${part.opened ? `  ${C.green}← opening in your browser${C.reset}` : ""}`);
+  }
   for (const [view, png] of Object.entries(part.previews ?? {})) {
     console.log(`  ${view.padEnd(7)} ${png}`);
   }

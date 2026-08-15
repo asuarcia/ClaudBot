@@ -99,7 +99,13 @@ export function writeViewer(stlPath, outDir, opts = {}) {
 export function open(file) {
   try {
     const [cmd, args] =
-      process.platform === "win32" ? ["cmd", ["/c", "start", "", file]]
+      // explorer.exe rather than `cmd /c start`. Both hand the file to the
+      // default handler, but `start` is a cmd builtin, so it needs a shell that
+      // then stays attached to the child — and in a sandboxed or non-interactive
+      // shell that hangs instead of returning. explorer takes the path directly,
+      // returns at once, and reports a nonzero exit even on success, which is
+      // why nothing here reads the exit code.
+      process.platform === "win32" ? ["explorer.exe", [file]]
       : process.platform === "darwin" ? ["open", [file]]
       : ["xdg-open", [file]];
     spawn(cmd, args, { detached: true, stdio: "ignore", windowsHide: true }).unref();
