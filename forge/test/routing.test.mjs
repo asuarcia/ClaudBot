@@ -16,6 +16,7 @@ import assert from "node:assert/strict";
 
 import { requirements, pick, get, BACKENDS } from "../src/backends/index.mjs";
 import { extractCode, SYSTEM } from "../src/prompts.mjs";
+import { looksUncut } from "../src/generate.mjs";
 
 const anyAvailable = () => BACKENDS.some((b) => b.available());
 
@@ -100,4 +101,33 @@ test("prose around a fenced block is discarded", () => {
 test("an empty response extracts to nothing, not to whitespace", () => {
   assert.equal(extractCode("   \n  "), "");
   assert.equal(extractCode(null), "");
+});
+
+// ─── the "it built, it gates clean, it is the wrong object" check ────────────
+
+test("a solid block flags when the request asked for a big void", () => {
+  // The real failure: a C-shaped desk clip came back as a rounded rectangular
+  // block filling 99.1% of its own bounding box, because the slot was sketched
+  // on the wrong plane and the subtraction removed nothing. Every gate passed.
+  const solid = { measured: { fill: 0.991, size: [15, 25, 48] } };
+  assert.ok(looksUncut("a C-shaped desk clip that clamps onto a 20mm desktop", solid));
+  assert.match(looksUncut("a clip with a slot", solid), /99\.1%/);
+});
+
+test("a legitimately solid part does not flag", () => {
+  const solid = { measured: { fill: 0.999, size: [30, 30, 8] } };
+  // No void was asked for, so filling the box is exactly right.
+  assert.equal(looksUncut("a 30x30x8 spacer plate", solid), null);
+});
+
+test("a small hole in a big plate does not flag", () => {
+  // 99.9% full and completely correct — a 3mm hole through a 100mm plate. This
+  // is why the word list excludes "hole" and "bore".
+  const plate = { measured: { fill: 0.9993, size: [100, 100, 5] } };
+  assert.equal(looksUncut("a 100x100x5 plate with a 3mm hole in the middle", plate), null);
+});
+
+test("a request for a void on a part that has one does not flag", () => {
+  const clip = { measured: { fill: 0.42, size: [15, 25, 48] } };
+  assert.equal(looksUncut("a C-shaped desk clip", clip), null);
 });

@@ -13,7 +13,7 @@
  * having them.
  */
 
-import { parseStl, bounds, manifold, overhangs } from "./stl.mjs";
+import { parseStl, bounds, manifold, overhangs, volume } from "./stl.mjs";
 
 /**
  * The Ender 3 Pro, from the machine itself rather than the marketing number.
@@ -48,6 +48,8 @@ export function checkPrintable(stlPath, printer = ENDER3_PRO) {
   const b = bounds(mesh);
   const m = manifold(mesh);
   const o = overhangs(mesh, { thresholdDeg: printer.overhangDeg });
+  const vol = volume(mesh);
+  const boxVol = b.size[0] * b.size[1] * b.size[2];
 
   const gates = [];
 
@@ -131,7 +133,18 @@ export function checkPrintable(stlPath, printer = ENDER3_PRO) {
     blockers,
     warnings,
     gates,
-    measured: { size: b.size, bounds: b, manifold: m, overhangs: o },
+    measured: {
+      size: b.size,
+      bounds: b,
+      manifold: m,
+      overhangs: o,
+      volumeMm3: vol,
+      // How much of its own bounding box the part actually fills. Not a gate —
+      // a spacer legitimately fills nearly all of it — but the number that says
+      // "this is a plain block", which is what a subtractive step that quietly
+      // removed nothing leaves behind. See `looksUncut` in generate.mjs.
+      fill: boxVol > 0 ? vol / boxVol : 0,
+    },
   };
 }
 

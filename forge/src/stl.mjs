@@ -185,6 +185,31 @@ export function manifold(mesh) {
   };
 }
 
+/**
+ * Enclosed volume in mm³.
+ *
+ * Divergence theorem: the signed volume of the tetrahedron from the origin to
+ * each triangle, summed. Where the origin sits does not matter — the outside
+ * contributions cancel — so this needs no centring and works on any closed
+ * surface. Taken absolute, because an inverted mesh gives the right magnitude
+ * with the wrong sign and the manifold gate is what reports the inversion.
+ *
+ * Meaningless on a mesh that is not closed, which is why callers should read
+ * `manifold().ok` first.
+ */
+export function volume(mesh) {
+  let v = 0;
+  for (const t of mesh.triangles) {
+    const [a, b, c] = t.v;
+    v += (
+      a[0] * (b[1] * c[2] - b[2] * c[1]) -
+      a[1] * (b[0] * c[2] - b[2] * c[0]) +
+      a[2] * (b[0] * c[1] - b[1] * c[0])
+    ) / 6;
+  }
+  return Math.abs(v);
+}
+
 /** Unit normal, recomputed from the winding rather than trusted from the file. */
 function faceNormal(t) {
   const [a, b, c] = t.v;

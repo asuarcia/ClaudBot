@@ -8,10 +8,46 @@ slices it. It does not print it. That stays a separate, deliberate act.
 claudbot forge doctor                 what's installed, and what each backend can do
 claudbot forge make "<description>"   model a part, gate it, render it
 claudbot forge build <part.py|.scad>  build source you wrote yourself
+claudbot forge view <part.stl>        open it in an interactive 3D viewer
 claudbot forge check <part.stl>       run the printability gates on any mesh
 claudbot forge render <part.stl>      shaded preview PNGs
 claudbot forge slice <part.stl>       G-code and a time/filament estimate
 ```
+
+`make` and `build` pop the viewer open when they finish. `--no-open` writes it
+without launching anything, which is what you want on a headless machine or in a
+loop that builds twenty parts.
+
+## Who writes the CAD
+
+Not Claude. `make` sends the request to the `cad` agent on NVIDIA NIM — modelling
+is a bounded, well-specified task with a compiler behind it, which is exactly the
+shape of work that belongs on a cheap endpoint. Override with `FORGE_AGENT`.
+
+The specialisation is the system prompt in `src/prompts.mjs`, not the model, and
+Forge passes it explicitly so it overrides the registry's `jobDescription`. `cad`
+exists as its own roster entry rather than reusing `coder` so CAD spend is
+metered separately in `.claudbot/usage.json` — and so it can be repointed without
+disturbing general code work.
+
+Model choice is measured, not assumed. Five candidates were sent the real prompt
+and the same request, and whatever came back was built:
+
+| model | tokens out | result |
+|---|---|---|
+| deepseek-v4-flash-0731 | **352** | built, correct, printable, STEP |
+| nemotron-3-nano-30b | 3145 | invented `drill_hole` |
+| nemotron-3-super-120b | 4096 | hallucinated `BuildPart.fillet` |
+| glm-5.2 | 331 | invented `regular_polygon` |
+| minimax-m3 | 376 | used a 2D `Rectangle` in a 3D context |
+
+Only one produced a part that compiles, and it was also the cheapest. Note the
+two reasoning models: they spent an order of magnitude more tokens thinking and
+still failed. Keep `cad` pointed at a fast instruct model.
+
+`build123d` is an obscure enough API that models confabulate freely in it. That
+is what the retry loop is for — the kernel's own error goes back verbatim, and
+it usually lands on the second attempt.
 
 ## Two backends, and why the default is the slower one
 
@@ -65,6 +101,28 @@ the gates — which is worse than not having them.
 already did. The OrcaSlicer CLI documents that it slices out-of-bounds parts
 without complaining, and the G-code it hands back crashes the gantry.
 
+## When it builds, gates clean, and is still wrong
+
+The gates check that a part *can* be printed. Nothing checks that it is the part
+you asked for, and those are different questions. A C-shaped desk clip came back
+as a rounded rectangular block: the slot had been sketched on the wrong plane, so
+the subtraction removed nothing, and what was left was a flawless, watertight,
+perfectly printable solid that passed every gate.
+
+There is one cheap signal for that class of failure. A part that fills
+essentially all of its own bounding box has no substantial void in it — so when
+the *request* asked for a slot, pocket, clip, hook, shell or cavity and the
+result fills ≥98.5% of its box, the cut almost certainly did nothing. `make`
+treats that as a failed attempt and retries with an explanation; if the second
+attempt is no better it hands the part over anyway with a loud warning, because
+throwing away the work would be worse than flagging it.
+
+The word list deliberately excludes "hole" and "bore". A 3mm hole through a
+100mm plate leaves the part 99.9% full and completely correct, and firing on it
+would waste a generation on a part that was already right.
+
+Everything else in this category is what the previews and the viewer are for.
+
 ## Previews
 
 Both backends render through `src/render.mjs` — Forge's own rasteriser — rather
@@ -74,7 +132,19 @@ a fillet impossible to judge, which defeats the point of having a B-rep backend;
 and hidden-line drawings are for a drawing sheet, not for answering "is this the
 thing I asked for".
 
-It is hand-rolled and dependency-free — a z-buffer rasteriser and a PNG writer
+There is also an interactive viewer — a single self-contained HTML file with the
+geometry embedded and hand-written WebGL, opened in the default browser. Drag to
+orbit, wheel to zoom, shift-drag to pan, and the number keys jump to the standard
+views. Three fixed PNGs cannot answer "what does the back look like" or "does
+that boss actually clear the rib", and both are one drag away.
+
+Not a desktop 3D viewer, because Windows dropped the built-in one from the
+default install and `start part.stl` opens whatever happens to be associated.
+Not khana's `view`, because it needs a VS Code extension running. Not Three.js
+from a CDN, because that breaks with no internet — including the portable-drive
+case this repo exists to support.
+
+The offline renderer is hand-rolled and dependency-free — a z-buffer rasteriser and a PNG writer
 are about a hundred lines each, and every 3D or image library for Node wants
 either a C++ toolchain or a headless GL stack. Orthographic camera (a
 perspective preview makes a straight extrusion look tapered), three-point studio

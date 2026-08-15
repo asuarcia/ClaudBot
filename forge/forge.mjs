@@ -22,9 +22,12 @@ import process from "node:process";
 import { status as toolStatus, INSTALL, find } from "./toolchain.mjs";
 import { status as backendStatus, get as getBackend, pick } from "./src/backends/index.mjs";
 import { checkPrintable, formatReport } from "./src/printable.mjs";
+
 import { renderViews } from "./src/render.mjs";
+import { show as showViewer, writeViewer } from "./src/viewer.mjs";
 import { slice } from "./src/slice.mjs";
 import { generatePart } from "./src/generate.mjs";
+import { ENDER3_PRO } from "./src/printable.mjs";
 
 const C = {
   reset: "\x1b[0m", dim: "\x1b[2m", bold: "\x1b[1m",
@@ -104,8 +107,32 @@ async function cmdMake(args) {
     return 1;
   }
 
+  res.part.viewer = viewerFor(res.part, opts);
   report(res.part, res);
+
+  // A part that built, passed every gate, and still does not look like what was
+  // asked for. Said loudly and last, so it is the thing left on screen.
+  if (res.suspect) {
+    console.log(`  ${C.yellow}⚠  This may not be the part you asked for.${C.reset}`);
+    console.log(`${C.dim}${indent(res.suspect)}${C.reset}\n`);
+  }
   return 0;
+}
+
+/**
+ * Write the interactive viewer and pop it open.
+ *
+ * On by default, because the whole point of building a part is to look at it
+ * and three fixed PNGs do not answer "what does the back look like". `--no-open`
+ * writes the file without launching anything, which is what you want on a
+ * machine with no desktop or in a loop that builds twenty parts.
+ */
+function viewerFor(part, opts, dir = null) {
+  const into = dir ?? path.join(part.dir ?? path.dirname(part.stl), "view");
+  const args = { name: part.name, printer: ENDER3_PRO };
+  return opts["no-open"]
+    ? writeViewer(part.stl, into, args)
+    : showViewer(part.stl, into, args);
 }
 
 function report(part, res) {
@@ -128,6 +155,7 @@ function report(part, res) {
   console.log(`  stl     ${part.stl}`);
   if (part.step) console.log(`  step    ${part.step}`);
   console.log(`  source  ${part.source}`);
+  if (part.viewer) console.log(`  view    ${part.viewer}`);
   for (const [view, png] of Object.entries(part.previews ?? {})) {
     console.log(`  ${view.padEnd(7)} ${png}`);
   }
@@ -164,7 +192,24 @@ async function cmdBuild(args) {
   }
 
   const previews = opts["no-render"] ? {} : renderViews(built.stl, path.join(out, "preview"), { name });
-  report({ name, ...built, previews, report: checkPrintable(built.stl) }, { attempts: [1] });
+  const part = { name, dir: out, ...built, previews, report: checkPrintable(built.stl) };
+  part.viewer = viewerFor(part, opts);
+  report(part, { attempts: [1] });
+  return 0;
+}
+
+// ─── view ────────────────────────────────────────────────────────────────────
+
+function cmdView(args) {
+  const opts = flags(args);
+  const stl = opts._[0];
+  if (!stl || !existsSync(stl)) {
+    console.error("Usage: claudbot forge view <part.stl>");
+    return 2;
+  }
+  const name = opts.name || path.basename(stl, path.extname(stl));
+  const file = viewerFor({ name, stl }, opts, opts.out || null);
+  console.log(`\n  ${file}\n`);
   return 0;
 }
 
@@ -273,12 +318,16 @@ function usage() {
     doctor                    what is installed, and what each backend can do
     make "<description>"      model a part, gate it, render it
     build <part.py|.scad>     build source you wrote yourself
+    view <part.stl>           open it in an interactive 3D viewer
     check <part.stl>          run the printability gates
     render <part.stl>         shaded preview PNGs
     slice <part.stl>          G-code and a time/filament estimate
 
   ${C.dim}make/build options:  --name <n>  --out <dir>  --backend b3d|openscad
-                       --fast  --attempts <n>${C.reset}
+                       --fast  --attempts <n>  --no-open${C.reset}
+
+  ${C.dim}make and build pop the viewer open when they finish. --no-open writes it
+  without launching a browser.${C.reset}
 `);
   return 0;
 }
@@ -288,6 +337,7 @@ const run = {
   doctor: cmdDoctor,
   make: cmdMake,
   build: cmdBuild,
+  view: cmdView,
   check: cmdCheck,
   render: cmdRender,
   slice: cmdSlice,

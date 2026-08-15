@@ -30,15 +30,23 @@ const DEFAULT_ATTEMPTS = 3;
 /**
  * The model that writes the CAD.
  *
- * Resolved through Claudbot's sub-agent registry rather than called directly,
- * so Forge inherits the roster, the metering and the timeout handling instead
- * of growing its own copy. `FORGE_AGENT` overrides which agent; a caller can
- * pass its own `ask` to bypass the registry entirely, which is what the tests
- * do so they never touch the network.
+ * Never Claude. Modelling is a bounded, well-specified task with a compiler
+ * behind it — exactly the shape of work that belongs on a cheap endpoint — and
+ * routing it through the registry means Forge inherits the roster, the usage
+ * metering and the timeout handling instead of growing its own copy.
+ *
+ * Defaults to the `cad` agent, which exists to keep CAD spend metered
+ * separately and to be repointable without disturbing general code work. The
+ * specialisation is not the model, it is `prompts.mjs` — passed explicitly here,
+ * so it overrides whatever jobDescription the registry entry carries.
+ *
+ * `FORGE_AGENT` picks a different agent; a caller can pass its own `ask` to
+ * bypass the registry entirely, which is what the tests do so they never touch
+ * the network.
  */
 async function defaultAsk(system, prompt) {
   const { runAgent } = await import("../../providers/agents.mjs");
-  return runAgent(process.env.FORGE_AGENT || "coder", prompt, system);
+  return runAgent(process.env.FORGE_AGENT || "cad", prompt, system);
 }
 
 /**
@@ -117,12 +125,31 @@ export async function generatePart(request, outDir, {
       continue;
     }
 
+    // Passing the gates is not the same as being the right object. This is the
+    // one wrongness that is cheap to detect, so it is checked before declaring
+    // success — and it is a retry, not a warning, because the model can fix it.
+    const uncut = looksUncut(request, report);
+    if (uncut) {
+      const repeated = attempts.some((a) => a.stage === "uncut");
+      attempts.push({ n, source, dir, built, report, failure: uncut, stage: "uncut" });
+      onProgress({ phase: "failed", attempt: n, stage: "shape", failure: uncut.split("\n")[0] });
+      if (!repeated && n < maxAttempts) {
+        prompt = retryPass(request, source, uncut, n + 1);
+        continue;
+      }
+      // Told once and it did not land. Hand the part back anyway rather than
+      // throwing the work away — but say plainly that it looks wrong, because
+      // the alternative is the user finding out from the printer.
+      onProgress({ phase: "suspect", attempt: n, failure: uncut });
+    }
+
     const previews = render ? backend.render(built.stl, path.join(dir, "preview"), { name }) : {};
-    attempts.push({ n, source, dir, built, report, previews, stage: "ok" });
+    attempts.push({ n, source, dir, built, report, previews, stage: uncut ? "suspect" : "ok" });
     onProgress({ phase: "built", attempt: n, stl: built.stl, step: built.step });
 
     return {
       ok: true,
+      suspect: uncut ?? null,
       backend: backend.name,
       why: routed.why,
       unmet: routed.unmet,
@@ -149,6 +176,61 @@ export async function generatePart(request, outDir, {
     part: null,
     failure: attempts.at(-1)?.failure ?? "no attempts were made",
   };
+}
+
+/**
+ * Words that mean a *substantial* void, not merely some material removed.
+ *
+ * Deliberately excludes "hole", "bore", "countersink" and friends. A 3mm hole
+ * through a 100mm plate leaves the part filling 99.9% of its bounding box, so a
+ * fill-based test cannot tell that part from one where the drill missed — and
+ * firing on it would cost a wasted generation on a part that was already right.
+ * Every word here implies a void big enough that its absence is unambiguous.
+ */
+const BIG_VOID = /\b(slot|pocket|hollow|recess|channel|cavity|socket|window|c-?shaped?|u-?shaped?|l-?shaped?|clip|hook|clamp|bracket\s+arm|cradle|holder|tray|box|enclosure|lid|cup|shell)\b/i;
+
+/** How full a part has to be before "nothing was removed" is the likely story. */
+const SOLID_FILL = 0.985;
+
+/**
+ * A solid block where a cut was asked for.
+ *
+ * The failure this exists for: a model writes a sketch on the wrong plane, or
+ * extrudes a subtraction in the wrong direction, and the cut removes nothing.
+ * What comes back is a clean, watertight, perfectly printable solid that is not
+ * the requested object at all — and every numeric gate passes it, because there
+ * is nothing wrong with it as geometry. A C-shaped desk clip came back as a
+ * rounded rectangular block exactly the size of its own bounding box.
+ *
+ * The signal is cheap: a part that fills essentially all of its bounding box has
+ * no substantial void anywhere. That is perfectly legitimate for a spacer or a
+ * plate, so it is only a fault when the request itself asked for a big void.
+ * Both halves have to agree, and both are deliberately narrow — the cost of a
+ * false positive is a wasted generation on a part that was already correct.
+ *
+ * Not 1.0, because a fillet or chamfer removes a little and a tessellated curve
+ * a little more. A real slot removes far more than the margin.
+ */
+export function looksUncut(request, report) {
+  const asked = request.match(BIG_VOID);
+  if (!asked) return null;
+  const fill = report.measured.fill;
+  if (!(fill >= SOLID_FILL)) return null;
+
+  return [
+    `The part built and passes every printability gate, but it is a plain solid block:`,
+    `it fills ${(fill * 100).toFixed(1)}% of its own bounding box (${report.measured.size.map((n) => n.toFixed(1)).join(" x ")} mm),`,
+    `so nothing was actually removed from it.`,
+    "",
+    `The request asks for "${asked[0]}", which means material has to come out. A`,
+    `subtraction that silently removes nothing is almost always a sketch on the`,
+    `wrong plane, an extrude going the wrong way, or a cutting solid that does not`,
+    `reach the material it is meant to cut.`,
+    "",
+    `Check that the cutting profile is positioned inside the body, and that it`,
+    `overshoots every face it passes through. Make the cut, then verify the result`,
+    `is no longer a plain box.`,
+  ].join("\n");
 }
 
 /**

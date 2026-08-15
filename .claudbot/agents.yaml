@@ -37,6 +37,33 @@ agents:
       and technical problem solving. Give it the full code/context it needs — it
       has no prior conversation history.
 
+  # Forge's CAD generator. Same model as `coder`, on purpose and on evidence:
+  # benchmarked 2026-08-15 by sending the real build123d system prompt to five
+  # candidates and building whatever came back. Only this one produced a part
+  # that compiled — nemotron-nano invented `drill_hole`, nemotron-super
+  # hallucinated `BuildPart.fillet`, glm-5.2 invented `regular_polygon`, and
+  # minimax-m3 used a 2D `Rectangle` in a 3D context. It was also the cheapest
+  # by a wide margin: 352 completion tokens against 3145 and 4096 for the two
+  # reasoning models, which spent all of it thinking and still failed.
+  #
+  # It exists as its own entry rather than reusing `coder` so CAD spend is
+  # metered separately in .claudbot/usage.json (and so on the Status widget),
+  # and so it can be repointed without touching general code work. The actual
+  # specialisation is the system prompt in forge/src/prompts.mjs, which Forge
+  # passes explicitly — this jobDescription is never sent.
+  - name: cad
+    model: deepseek-ai/deepseek-v4-flash-0731
+    endpoint: https://integrate.api.nvidia.com/v1
+    apiKeyEnv: NIM_API_KEY
+    maxTokens: 4096
+    jobDescription: >
+      Writes parametric CAD — build123d (Python) and OpenSCAD — for Forge's
+      `claudbot forge make`. Not for general use: Forge supplies its own system
+      prompt carrying the modelling rules and the printer's constraints, and
+      calls this agent through FORGE_AGENT. Reasoning models do badly at this
+      and cost an order of magnitude more, so keep it pointed at a fast
+      instruct model.
+
   - name: researcher
     model: nvidia/nemotron-3-ultra-550b-a55b
     endpoint: https://integrate.api.nvidia.com/v1
