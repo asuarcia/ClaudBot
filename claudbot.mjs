@@ -248,6 +248,10 @@ function cmdHelp() {
     widgets autostart  Bring the widgets back automatically at every logon
       status           Show what's registered and what's running
       uninstall        Stop starting them at logon
+    forge doctor       CAD: what's installed and what each backend can do
+    forge make "..."   Model a part from a description, then gate and render it
+    forge check <stl>  Run the printability gates on a mesh
+    forge slice <stl>  G-code and a time/filament estimate
     sync               Merge changes with your USB drive, both directions
     sync --drive <p>   Point at a specific drive instead of auto-detecting
     sync --yes         Apply without confirming
@@ -1180,6 +1184,9 @@ async function main() {
       }
       return runScript("widgets/bridge.mjs", rest.length ? rest : ["--watch"]);
     case "sync":     return cmdSync(rest);
+    // CAD for the printer. `forge doctor` reports what is installed; the rest
+    // model, gate, preview and slice. Deliberately no print verb.
+    case "forge":    return runScript("forge/forge.mjs", rest);
     // Unadvertised on purpose: voice is fully built and still runs, it just
     // isn't in the menu or `help` output. Keep this route.
     case "voice":    return runScript("voice.mjs", rest);

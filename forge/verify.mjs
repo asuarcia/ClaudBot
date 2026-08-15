@@ -18,6 +18,9 @@ import path from "node:path";
 import { find, status, INSTALL } from "./toolchain.mjs";
 import { checkPrintable, formatReport } from "./src/printable.mjs";
 import { slice, ender3ProProfiles } from "./src/slice.mjs";
+import { status as backendStatus, pick } from "./src/backends/index.mjs";
+import * as b3d from "./src/backends/b3d.mjs";
+import { renderViews } from "./src/render.mjs";
 
 const work = mkdtempSync(path.join(tmpdir(), "forge-verify-"));
 let failures = 0;
@@ -138,6 +141,86 @@ if (!find("khana")) {
     report.printable
       ? ok("build123d mesh passes the same gates")
       : bad(`build123d mesh rejected: ${report.blockers.map((b) => b.name).join(", ")}`);
+  }
+}
+
+// --- 6. The backend module and the router ------------------------------------
+// Section 5 proves the khana CLI works. This proves Forge's wrapper around it
+// does — including the epilogue, which is the piece that turns whatever a model
+// happened to leave at module scope into something khana will accept.
+console.log("\nb3d backend");
+let b3dStl = null;
+if (!b3d.available()) {
+  skip("no cad-khana, skipping");
+} else {
+  // Ends at a bare Part on purpose. khana rejects that outright (exit 2), so if
+  // this builds, the epilogue did its job.
+  const source = [
+    "from build123d import *",
+    "",
+    "with BuildPart() as p:",
+    "    Box(30, 20, 10, align=(Align.CENTER, Align.CENTER, Align.MIN))",
+    "    fillet(p.edges().filter_by(Axis.Z), radius=4)",
+    "",
+    "part = p.part",
+  ].join("\n");
+
+  try {
+    const built = b3d.build(source, path.join(work, "backend"), { name: "plate" });
+    ok("built a bare Part — the Assembly epilogue works");
+    built.step ? ok("STEP exported alongside the STL") : bad("no STEP produced");
+
+    const g = built.geometry;
+    if (!g) bad("khana check produced no diagnostics");
+    else if (g.valid === false) bad("khana reports the solid is not a valid B-rep");
+    else ok(`khana: ${g.faces} faces, ${(g.volumeMm3 / 1000).toFixed(1)}cm³, valid`);
+
+    b3dStl = built.stl;
+  } catch (err) {
+    bad(err.message.split("\n")[0]);
+  }
+
+  // A model that cannot build must come back with the kernel's own words, not a
+  // generic failure — the retry loop feeds this text straight back.
+  try {
+    b3d.build(
+      "from build123d import *\nwith BuildPart() as p:\n    Box(10, 10, 10)\n    fillet(p.edges(), radius=99)\npart = p.part",
+      path.join(work, "backend-fail"),
+      { name: "toobig" },
+    );
+    bad("an impossible fillet was accepted");
+  } catch (err) {
+    /radius/i.test(err.message)
+      ? ok("an impossible fillet fails with the kernel's own message")
+      : bad(`unhelpful failure message: ${err.message.split("\n")[0]}`);
+  }
+}
+
+console.log("\nrouter");
+for (const b of backendStatus()) {
+  console.log(`  ${b.available ? "ok   " : "skip "} ${b.name.padEnd(9)} ${b.available ? "available" : "not installed"}`);
+}
+if (backendStatus().some((b) => b.available)) {
+  const r = pick("a bracket with rounded corners and a chamfered top");
+  r.backend.capabilities.fillets || r.unmet.includes("fillets")
+    ? ok(`"rounded corners" routed to ${r.backend.name} — ${r.why}`)
+    : bad(`"rounded corners" routed to ${r.backend.name}, which cannot fillet and did not say so`);
+}
+
+// --- 7. Previews --------------------------------------------------------------
+console.log("\npreviews");
+const previewSource = b3dStl ?? scadStl;
+if (!previewSource) {
+  skip("no mesh to render");
+} else {
+  const views = renderViews(previewSource, path.join(work, "preview"), { name: "check", width: 400, height: 300 });
+  for (const [view, png] of Object.entries(views)) {
+    const buf = readFileSync(png);
+    // Checking the signature rather than just the file size: an empty or
+    // truncated PNG still has a plausible length, and the encoder is ours.
+    buf.subarray(1, 4).toString("ascii") === "PNG" && buf.length > 1000
+      ? ok(`${view} render (${(buf.length / 1024).toFixed(0)}KB)`)
+      : bad(`${view} render is not a usable PNG`);
   }
 }
 

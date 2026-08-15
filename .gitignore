@@ -37,6 +37,9 @@ widgets/skins/Claudbot/@Resources/paths.inc
 # briefing digests (generated each run, machine-specific)
 briefing/data/
 
+# forge output: generated parts, previews, G-code. Large, binary, regenerable.
+forge-out/
+
 # voice subsystem: venv, downloaded/trained models, recorded samples
 voice/.venv/
 voice/models/
