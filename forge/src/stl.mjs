@@ -128,12 +128,29 @@ export function manifold(mesh) {
   const edges = new Map(); // "a|b" (undirected, sorted) -> { count, sameWay }
   const directed = new Set(); // "a>b", to spot two triangles walking an edge alike
 
+  let degenerate = 0;
+
   for (const t of mesh.triangles) {
     const k = t.v.map(key);
+
+    // A triangle with two coincident corners has no area, so it is not part of
+    // the surface and must be left out of the topology entirely — not merely
+    // have its collapsed edge skipped. Skipping only that one pair leaves the
+    // other two, which are the *same* undirected edge, so a single degenerate
+    // triangle would contribute it twice: the shared edge then has three uses
+    // and reads as non-manifold, and the duplicate traversal reads as an
+    // inverted face. Every sphere OpenCascade tessellates ends in one of these
+    // at each pole, so a nine-sphere model came back with nine open edges, nine
+    // inverted faces and nine zero-area triangles — the same nine triangles
+    // reported three ways, hard-blocking a mesh that is in fact watertight.
+    if (k[0] === k[1] || k[1] === k[2] || k[0] === k[2]) {
+      degenerate++;
+      continue;
+    }
+
     for (let i = 0; i < 3; i++) {
       const a = k[i];
       const b = k[(i + 1) % 3];
-      if (a === b) continue; // degenerate sliver; counted separately below
 
       const id = a < b ? `${a}|${b}` : `${b}|${a}`;
       const rec = edges.get(id) ?? { count: 0, sameWay: false };
@@ -153,13 +170,13 @@ export function manifold(mesh) {
     if (rec.sameWay) flipped++;
   }
 
-  const degenerate = mesh.triangles.filter((t) => {
-    const k = t.v.map(key);
-    return k[0] === k[1] || k[1] === k[2] || k[0] === k[2];
-  }).length;
-
   return {
-    ok: open === 0 && excess === 0 && flipped === 0 && degenerate === 0,
+    // Zero-area triangles deliberately do not make a mesh non-manifold. They
+    // carry no surface, every slicer discards them, and CAD kernels emit them
+    // routinely at the poles of a sphere. They are still counted and reported,
+    // because a mesh that is mostly degenerate is worth knowing about — but as
+    // something to mention, not something to refuse to print.
+    ok: open === 0 && excess === 0 && flipped === 0,
     openEdges: open,
     nonManifoldEdges: excess,
     flippedFaces: flipped,

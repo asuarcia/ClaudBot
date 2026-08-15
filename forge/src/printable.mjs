@@ -57,12 +57,17 @@ export function checkPrintable(stlPath, printer = ENDER3_PRO) {
     m.ok,
     true,
     m.ok
+      // Zero-area triangles are worth mentioning and not worth blocking on:
+      // OpenCascade puts one at the pole of every sphere it tessellates, and
+      // slicers drop them. Saying so beats a silent count nobody can interpret.
       ? `closed surface, ${m.triangles} triangles`
+        + (m.degenerateTriangles
+          ? ` (${m.degenerateTriangles} zero-area, which slicers discard)`
+          : "")
       : [
           m.openEdges && `${m.openEdges} open edge(s) — the surface has holes`,
           m.nonManifoldEdges && `${m.nonManifoldEdges} edge(s) shared by more than two faces`,
           m.flippedFaces && `${m.flippedFaces} inverted face(s) — part of the model is inside-out`,
-          m.degenerateTriangles && `${m.degenerateTriangles} zero-area triangle(s)`,
         ].filter(Boolean).join("; "),
   ));
 

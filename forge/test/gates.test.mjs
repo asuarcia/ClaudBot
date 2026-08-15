@@ -78,10 +78,32 @@ test("manifold gate: an inside-out face is caught even though the mesh is closed
   assert.match(report.blockers[0].detail, /inside-out/);
 });
 
-test("manifold gate: zero-area triangles are reported", () => {
+test("manifold gate: zero-area triangles are reported but do not block", () => {
+  // A zero-area triangle carries no surface, every slicer discards it, and
+  // OpenCascade emits one at the pole of every sphere it tessellates. Blocking
+  // on them would make the B-rep backend unable to produce any rounded part.
   const f = writeStl(at("degenerate.stl"), withDegenerate(box([20, 20, 20])));
   const report = checkPrintable(f);
-  assert.ok(report.measured.manifold.degenerateTriangles > 0);
+
+  assert.ok(report.measured.manifold.degenerateTriangles > 0, "still counted");
+  assert.ok(report.printable, "a closed mesh with a zero-area sliver is printable");
+  assert.match(report.gates.find((g) => g.name === "manifold").detail, /zero-area/);
+});
+
+test("manifold gate: a zero-area triangle does not fake a non-manifold edge", () => {
+  // The regression this exists for. A degenerate triangle's two surviving
+  // edges are the *same* undirected edge, so counting them adds two uses to an
+  // edge that already has two — reading as non-manifold — and the duplicate
+  // traversal reads as an inverted face. One bad triangle produced three
+  // separate failures, and a nine-sphere caterpillar reported "9 open edges, 9
+  // inverted faces, 9 zero-area triangles" for a mesh that was watertight.
+  const clean = manifold({ triangles: box([20, 20, 20]) });
+  const withSliver = manifold({ triangles: withDegenerate(box([20, 20, 20])) });
+
+  assert.equal(withSliver.nonManifoldEdges, clean.nonManifoldEdges, "no invented non-manifold edges");
+  assert.equal(withSliver.flippedFaces, clean.flippedFaces, "no invented inverted faces");
+  assert.equal(withSliver.openEdges, clean.openEdges, "no invented open edges");
+  assert.ok(withSliver.ok, "the mesh is still judged watertight");
 });
 
 test("bed-fit gate: an oversized part blocks", () => {
