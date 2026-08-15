@@ -17,10 +17,45 @@
 
 import path from "node:path";
 import os from "node:os";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 
 const WIN = process.platform === "win32";
+
+/**
+ * Where Forge keeps portable copies of the tools it drives.
+ *
+ * These are unpacked ZIPs, not installed programs. That is deliberate: a
+ * system-wide install needs elevation, and this machine's guard blocks it
+ * outright. Portable builds need no admin, pin an exact version, and can be
+ * deleted by removing one directory. OpenSCAD and OrcaSlicer both publish them.
+ */
+export function toolsDir() {
+  if (process.env.FORGE_TOOLS) return process.env.FORGE_TOOLS;
+  const base = WIN
+    ? (process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local"))
+    : path.join(os.homedir(), ".local", "share");
+  return path.join(base, "Claudbot", "tools");
+}
+
+/**
+ * OpenSCAD's portable ZIP unpacks to a version-stamped directory
+ * (OpenSCAD-2026.08.13-x86-64), so the path can't be a constant. Take the
+ * highest-sorting one, which for date-stamped snapshots is the newest.
+ */
+function portableOpenscad() {
+  const root = toolsDir();
+  if (!existsSync(root)) return null;
+  const dirs = readdirSync(root)
+    .filter((d) => d.toLowerCase().startsWith("openscad"))
+    .sort()
+    .reverse();
+  for (const d of dirs) {
+    const exe = path.join(root, d, WIN ? "openscad.exe" : "openscad");
+    if (existsSync(exe)) return exe;
+  }
+  return null;
+}
 
 /** Candidate absolute paths per tool, in preference order, per platform. */
 const KNOWN = {
@@ -78,6 +113,20 @@ function onPath(cmd) {
   return first?.trim() || null;
 }
 
+/** Forge's own unpacked copy of `tool`, if one has been fetched. */
+function portable(tool) {
+  if (tool === "openscad") return portableOpenscad();
+
+  const candidates = {
+    // OrcaSlicer's ZIP unpacks flat, so this one is a fixed path.
+    orca: [path.join(toolsDir(), "orca", WIN ? "orca-slicer.exe" : "orca-slicer")],
+    // khana comes from `uv tool install`, which owns its own location.
+    khana: [path.join(os.homedir(), ".local", "bin", WIN ? "khana.exe" : "khana")],
+  }[tool] ?? [];
+
+  return candidates.find((p) => existsSync(p)) ?? null;
+}
+
 const cache = new Map();
 
 /**
@@ -99,7 +148,11 @@ export function find(tool) {
     }
     found = pinned;
   } else {
-    found = onPath(ON_PATH[tool])
+    // Forge's own portable copies win over anything system-wide: they are the
+    // versions this repo was tested against, and a stray old OpenSCAD on PATH
+    // would otherwise silently take precedence.
+    found = portable(tool)
+      ?? onPath(ON_PATH[tool])
       ?? (KNOWN[tool][process.platform] ?? []).find((p) => existsSync(p))
       ?? null;
   }
