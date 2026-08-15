@@ -1,0 +1,13 @@
+{
+	"autodeskProduct":	"Fusion360",
+	"type":	"addin",
+	"id":	"7f3c1e42-9b5a-4d18-8c66-2ae5d0b41f97",
+	"author":	"Claudbot / Forge",
+	"description":	{
+		"":	"Watches a job folder and builds what Forge sends it — as native parametric geometry in the active document, not an imported mesh."
+	},
+	"version":	"0.1.0",
+	"runOnStartup":	true,
+	"supportedOS":	"windows|mac",
+	"editEnabled":	true
+}

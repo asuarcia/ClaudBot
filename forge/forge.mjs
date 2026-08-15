@@ -215,6 +215,113 @@ function cmdView(args) {
   return 0;
 }
 
+// ─── fusion ──────────────────────────────────────────────────────────────────
+
+async function cmdFusion(args) {
+  const fusion = await import("./src/fusion.mjs");
+  const [sub, ...rest] = args;
+  const opts = flags(rest);
+
+  if (sub === "install") {
+    const { dest, jobs } = fusion.install();
+    console.log(`\n  ${C.green}✓${C.reset} add-in installed`);
+    console.log(`  ${C.dim}${dest}${C.reset}`);
+    console.log(`  ${C.dim}jobs: ${jobs}${C.reset}`);
+    console.log(`\n  ${C.bold}One manual step, once:${C.reset} Fusion only scans this folder at startup.`);
+    console.log(`  Restart Fusion, then check ${C.cyan}Utilities ▸ Add-Ins ▸ ForgeBridge${C.reset} is running.`);
+    console.log(`  ${C.dim}It is set to run on startup, so this is the only time you have to.${C.reset}\n`);
+    return 0;
+  }
+
+  if (sub === "uninstall") {
+    console.log(`\n  removed ${fusion.uninstall()}\n`);
+    return 0;
+  }
+
+  if (sub === "doctor") {
+    const s = fusion.status();
+    const mark = (b) => (b ? `${C.green}✓${C.reset}` : `${C.red}✗${C.reset}`);
+    console.log("");
+    console.log(`  ${mark(s.installed)} Fusion 360 installed   ${C.dim}${s.apiDir}${C.reset}`);
+    console.log(`  ${mark(s.addInPresent)} ForgeBridge add-in     ${C.dim}${s.addIn}${C.reset}`);
+    console.log(`  ${mark(s.running)} Fusion running`);
+    console.log(`  ${mark(s.bridge.everRan)} bridge has started     ${C.dim}${s.bridge.lastStart ?? "never — restart Fusion and enable it"}${C.reset}`);
+    console.log(`  ${C.dim}jobs: ${s.jobs}${C.reset}`);
+
+    if (s.installed && s.addInPresent && s.running) {
+      process.stdout.write("\n  pinging the bridge… ");
+      try {
+        const r = await fusion.ping();
+        console.log(`${C.green}${r.detail}${C.reset} ${C.dim}(Fusion ${r.version})${C.reset}\n`);
+        return 0;
+      } catch (err) {
+        console.log(`${C.red}no answer${C.reset}\n  ${C.dim}${err.message}${C.reset}\n`);
+        return 1;
+      }
+    }
+    console.log("");
+    return s.installed ? 1 : 2;
+  }
+
+  if (sub === "open" || sub === "import") {
+    const file = opts._[0];
+    if (!file || !existsSync(file)) {
+      console.error("Usage: claudbot forge fusion open <part.step>");
+      return 2;
+    }
+    if (!fusion.running() && fusion.launch()) {
+      console.log(`\n  ${C.dim}starting Fusion…${C.reset}`);
+    }
+    const r = await fusion.send({ kind: "import", path: path.resolve(file) }, { timeoutMs: 300_000 });
+    console.log(r.ok ? `\n  ${C.green}${r.detail}${C.reset}\n` : `\n  ${C.red}${r.detail}${C.reset}\n`);
+    return r.ok ? 0 : 1;
+  }
+
+  if (sub === "run") {
+    const file = opts._[0];
+    if (!file || !existsSync(file)) {
+      console.error("Usage: claudbot forge fusion run <script.py>");
+      return 2;
+    }
+    return runInFusion(fusion, path.resolve(file), opts.name || path.basename(file, ".py"));
+  }
+
+  console.log(`
+  ${C.bold}claudbot forge fusion${C.reset} — build in the Fusion 360 desktop app
+
+    install            copy the ForgeBridge add-in into Fusion
+    doctor             is it installed, running, and answering?
+    run <script.py>    execute Fusion API Python in the live session
+    open <part.step>   import a file into the active document
+    uninstall          remove the add-in
+`);
+  return 0;
+}
+
+/** Send a Fusion API script to the live session and report what came back. */
+async function runInFusion(fusion, file, name) {
+  if (!fusion.running()) {
+    if (fusion.launch()) {
+      console.log(`\n  ${C.dim}Fusion is not running — starting it. The job is queued and will`);
+      console.log(`  build once it is up and ForgeBridge has loaded.${C.reset}`);
+    }
+  }
+  process.stdout.write(`\n  building in Fusion… `);
+  try {
+    const r = await fusion.send({ kind: "script", path: file, name }, { timeoutMs: 300_000 });
+    if (!r.ok) {
+      console.log(`${C.red}failed${C.reset}\n${C.dim}${indent(r.detail)}${C.reset}\n`);
+      return 1;
+    }
+    console.log(`${C.green}ok${C.reset}`);
+    console.log(`  ${C.dim}${r.detail} — ${r.timeline} timeline features, ${r.bodies} bodies, in "${r.document}"${C.reset}\n`);
+    return 0;
+  } catch (err) {
+    console.log(`${C.yellow}queued${C.reset}\n  ${C.dim}${err.message}${C.reset}\n`);
+    return 1;
+  }
+}
+
 // ─── check / render / slice ──────────────────────────────────────────────────
 
 function cmdCheck(args) {
@@ -321,6 +428,7 @@ function usage() {
     make "<description>"      model a part, gate it, render it
     build <part.py|.scad>     build source you wrote yourself
     view <part.stl>           open it in an interactive 3D viewer
+    fusion <cmd>              build in the Fusion 360 desktop app (install|doctor|run|open)
     check <part.stl>          run the printability gates
     render <part.stl>         shaded preview PNGs
     slice <part.stl>          G-code and a time/filament estimate
@@ -340,6 +448,7 @@ const run = {
   make: cmdMake,
   build: cmdBuild,
   view: cmdView,
+  fusion: cmdFusion,
   check: cmdCheck,
   render: cmdRender,
   slice: cmdSlice,
