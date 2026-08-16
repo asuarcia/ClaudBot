@@ -84,6 +84,19 @@ const KNOWN = {
     darwin: [path.join(os.homedir(), ".local", "bin", "khana")],
     linux: [path.join(os.homedir(), ".local", "bin", "khana")],
   },
+  // The interactive CAD you actually sit in front of. FreeCAD rather than
+  // Fusion because it is free outright — LGPL, no account, no licence, no
+  // three-year clock — and because it is built on the same OpenCascade kernel
+  // as build123d, so every STEP Forge already produces opens in it natively.
+  // It also ships a real material library, which was the requirement.
+  freecad: {
+    win32: [
+      "C:\Program Files\FreeCAD 1.1\bin\FreeCAD.exe",
+      "C:\Program Files\FreeCAD\bin\FreeCAD.exe",
+    ],
+    darwin: ["/Applications/FreeCAD.app/Contents/MacOS/FreeCAD"],
+    linux: ["/usr/bin/freecad", "/usr/local/bin/freecad"],
+  },
 };
 
 /** Env var that pins each tool, for hosts where the guesses are all wrong. */
@@ -91,6 +104,7 @@ const OVERRIDE = {
   openscad: "FORGE_OPENSCAD",
   orca: "FORGE_ORCA",
   khana: "FORGE_KHANA",
+  freecad: "FORGE_FREECAD",
 };
 
 /** Bare command names to try on PATH. */
@@ -98,6 +112,7 @@ const ON_PATH = {
   openscad: "openscad",
   orca: "orca-slicer",
   khana: "khana",
+  freecad: "freecad",
 };
 
 /**
@@ -122,6 +137,10 @@ function portable(tool) {
     orca: [path.join(toolsDir(), "orca", WIN ? "orca-slicer.exe" : "orca-slicer")],
     // khana comes from `uv tool install`, which owns its own location.
     khana: [path.join(os.homedir(), ".local", "bin", WIN ? "khana.exe" : "khana")],
+    // FreeCAD's portable build unpacks flat, so this one is a fixed path.
+    freecad: [
+      path.join(toolsDir(), "freecad", WIN ? "FreeCAD.exe" : path.join("bin", "FreeCAD")),
+    ],
   }[tool] ?? [];
 
   return candidates.find((p) => existsSync(p)) ?? null;
@@ -177,6 +196,9 @@ export const INSTALL = {
     ? "winget install -e --id SoftFever.OrcaSlicer"
     : "https://github.com/SoftFever/OrcaSlicer/releases",
   khana: "uv tool install git+https://github.com/cyberchitta/cad-khana",
+  freecad: WIN
+    ? "winget install -e --id FreeCAD.FreeCAD  (or the portable .7z from freecad.org)"
+    : "https://www.freecad.org/downloads.php",
 };
 
 /** Every tool that isn't installed, as [{ tool, install }]. */
