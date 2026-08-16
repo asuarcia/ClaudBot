@@ -9,6 +9,7 @@ claudbot forge doctor                 what's installed, and what each backend ca
 claudbot forge make "<description>"   model a part, gate it, render it
 claudbot forge build <part.py|.scad>  build source you wrote yourself
 claudbot forge view <part.stl>        open it in an interactive 3D viewer
+claudbot forge freecad <cmd>          run it in FreeCAD, headless or live
 claudbot forge check <part.stl>       run the printability gates on any mesh
 claudbot forge render <part.stl>      shaded preview PNGs
 claudbot forge slice <part.stl>       G-code and a time/filament estimate
@@ -78,6 +79,41 @@ backend costs seconds, and sending a filleted part to the mesh backend costs a
 part with mitred corners that looks fine in the preview and is wrong in the hand.
 
 Force one with `--backend b3d|openscad`, or ask for speed with `--fast`.
+
+## The interactive CAD
+
+The backends make a file and show you a picture of it. That is the wrong output
+when the answer is "not quite, move that" — for which you want to be sitting in
+real CAD, with the part in front of you.
+
+That is FreeCAD, and Forge drives it two ways:
+
+```
+claudbot forge freecad install          copy the ForgeBridge addon into FreeCAD
+claudbot forge freecad doctor           installed, running, and answering?
+claudbot forge freecad exec <s.py>      run it headlessly — no GUI, no bridge
+claudbot forge freecad run <s.py>       run it in the live GUI session
+claudbot forge freecad open <p.step>    import a file into the open document
+```
+
+`exec` is the one most things should use. FreeCADCmd runs a script in a cold
+process with no GUI at all, so it works unattended, in a loop, and on a machine
+where FreeCAD has never been opened. Fusion had no equivalent — its API is only
+reachable from inside a running instance — and that difference is most of why
+this is the better tool for the job.
+
+`run` is for the other case: the document you have open, with your unsaved work
+and your undo stack. Forge writes a job file into a watched folder and the
+ForgeBridge addon picks it up. A folder rather than a socket because it needs no
+ports and no auth, survives FreeCAD restarting, and a job written while FreeCAD
+is closed simply runs when it next opens.
+
+Both paths execute through the *same* `handle()` in the addon, which matters
+more than it sounds: one definition of what a Forge script may assume. Both
+pre-bind `FreeCAD`, `App`, `Part` and `doc`, both recompute afterwards, both
+capture the script's own `print()` output, and both return the interpreter's
+traceback verbatim on failure. Two implementations would drift, and a script
+that worked in one and failed in the other would get blamed on the model.
 
 ## The gates
 
@@ -161,12 +197,12 @@ every large flat face.
 
 ## Toolchain
 
-Three external programs, none of them Node packages, none reliably on PATH on
+Four external programs, none of them Node packages, none reliably on PATH on
 Windows. `toolchain.mjs` looks in this order: an env override
-(`FORGE_OPENSCAD`, `FORGE_ORCA`, `FORGE_KHANA`), Forge's own portable copy, then
-PATH, then the known install locations for the platform. A missing tool is not
-an error at import time — Forge is useful without a slicer, and useful without
-cad-khana.
+(`FORGE_OPENSCAD`, `FORGE_ORCA`, `FORGE_KHANA`, `FORGE_FREECAD`), Forge's own
+portable copy, then PATH, then the known install locations for the platform. A
+missing tool is not an error at import time — Forge is useful without a slicer,
+and useful without cad-khana.
 
 Portable copies live under `%LOCALAPPDATA%\Claudbot\tools` as unpacked ZIPs
 rather than installed programs: a system-wide install needs elevation this
@@ -177,6 +213,7 @@ deleting a directory.
 uv tool install git+https://github.com/cyberchitta/cad-khana   # b3d backend
 winget install -e --id OpenSCAD.OpenSCAD                        # mesh backend
 winget install -e --id SoftFever.OrcaSlicer                     # slicing
+winget install -e --id FreeCAD.FreeCAD                          # interactive CAD
 ```
 
 ## Things about the tools that cost real time to find out
@@ -200,6 +237,30 @@ to build, and the last line before it is the message worth feeding back.
 **OpenSCAD.** It prints `ERROR:` to stderr and still exits 0 for several classes
 of problem, so success is judged by reading stderr and checking that an STL
 actually appeared.
+
+**FreeCAD addons.** Two traps, and neither announces itself.
+
+FreeCAD does not *import* `Init.py` and `InitGui.py`, it `exec()`s them in a
+bare namespace — so **`__file__` is not defined in either**. The obvious first
+line of any addon, `os.path.dirname(os.path.abspath(__file__))`, raises
+NameError and aborts the whole file before it does anything, and the only trace
+is one line in a log. Nothing needs it: FreeCAD has already put the addon folder
+on `sys.path`, so a plain `import` resolves.
+
+Worse, because it fails *later*: a `QTimer` must be referenced by something that
+outlives startup or it is garbage-collected and silently stops firing. The usual
+advice is "keep it in a module-level global" — but since InitGui.py is exec'd
+rather than imported, a global there is really a local in a namespace that is
+discarded the moment the file ends. The bridge then starts, writes its alive
+marker, reports no error, and never answers a single job. The timer has to be
+parked on a genuinely imported module; `forge_bridge.start_gui()` is where it
+lives. Both are pinned by tests in `forge/test/freecad.test.mjs`.
+
+Also: the user data directory is version-stamped (`…\FreeCAD\v1-1\`), so the Mod
+folder cannot be assembled from a constant. `freecad.mjs` asks FreeCADCmd for
+`getUserAppDataDir()` rather than guessing — a hardcoded path would install the
+addon successfully into a folder the next release ignores, which is the same
+green-status-for-something-that-cannot-run failure the Fusion detection had.
 
 ## Verifying
 

@@ -334,6 +334,153 @@ async function runInFusion(fusion, file, name) {
   }
 }
 
+// ─── freecad ─────────────────────────────────────────────────────────────────
+
+/**
+ * The interactive CAD, and the one Forge actually has.
+ *
+ * Structurally the same bridge as Fusion's — a job folder, an addon that
+ * watches it — but with one capability Fusion never had: FreeCADCmd runs a
+ * script headlessly, with no GUI and no bridge at all. So `exec` and `run` are
+ * genuinely different commands here rather than two names for one thing, and
+ * anything scriptable should prefer `exec`, which needs nothing to be open.
+ */
+async function cmdFreecad(args) {
+  const fc = await import("./src/freecad.mjs");
+  const [sub, ...rest] = args;
+  const opts = flags(rest);
+
+  if (sub === "install") {
+    const { dest, jobs } = fc.install();
+    console.log(`\n  ${C.green}✓${C.reset} addon installed`);
+    console.log(`  ${C.dim}${dest}${C.reset}`);
+    console.log(`  ${C.dim}jobs: ${jobs}${C.reset}`);
+    console.log(`\n  ${C.bold}One manual step, once:${C.reset} FreeCAD scans Mod/ only at startup.`);
+    console.log(`  Restart FreeCAD if it is open. There is nothing to enable — an addon`);
+    console.log(`  ${C.dim}in Mod/ loads automatically, unlike a Fusion add-in.${C.reset}\n`);
+    return 0;
+  }
+
+  if (sub === "uninstall") {
+    console.log(`\n  removed ${fc.uninstall()}\n`);
+    return 0;
+  }
+
+  if (sub === "doctor") {
+    const s = fc.status();
+    const mark = (b) => (b ? `${C.green}✓${C.reset}` : `${C.red}✗${C.reset}`);
+    console.log("");
+    console.log(`  ${mark(Boolean(s.gui))} FreeCAD (GUI)          ${C.dim}${s.gui ?? "not found"}${C.reset}`);
+    console.log(`  ${mark(Boolean(s.console))} FreeCADCmd (headless)  ${C.dim}${s.console ?? "not found"}${C.reset}`);
+    console.log(`  ${C.dim}user data: ${s.userAppData}${C.reset}`);
+    console.log(`  ${mark(s.addInPresent)} ForgeBridge addon      ${C.dim}${s.addIn}${C.reset}`);
+    console.log(`  ${mark(s.running)} FreeCAD running`);
+    console.log(`  ${mark(s.bridge.everRan)} bridge has started     ${C.dim}${s.bridge.lastStart ?? "never — restart FreeCAD"}${C.reset}`);
+    console.log(`  ${C.dim}jobs: ${s.jobs}${C.reset}`);
+
+    // The headless path is worth proving on its own, because it works even
+    // when nothing is open and it is the one most things should be using.
+    if (s.console) {
+      process.stdout.write("\n  headless check… ");
+      const r = fc.runHeadless(null, { code: "import FreeCAD;print(FreeCAD.Version()[0]+'.'+FreeCAD.Version()[1]+'.'+FreeCAD.Version()[2])" });
+      const ver = (r.stdout || "").trim().split(/\r?\n/).filter(Boolean).pop();
+      console.log(r.ok ? `${C.green}ok${C.reset} ${C.dim}(FreeCAD ${ver})${C.reset}` : `${C.red}failed${C.reset} ${C.dim}${r.stderr.trim()}${C.reset}`);
+    }
+
+    if (s.addInPresent && s.running) {
+      process.stdout.write("  pinging the bridge… ");
+      try {
+        const r = await fc.ping();
+        console.log(`${C.green}${r.detail}${C.reset} ${C.dim}(FreeCAD ${r.version})${C.reset}\n`);
+        return 0;
+      } catch (err) {
+        console.log(`${C.red}no answer${C.reset}\n  ${C.dim}${err.message}${C.reset}\n`);
+        return 1;
+      }
+    }
+    console.log("");
+    return s.installed ? 1 : 2;
+  }
+
+  if (sub === "open" || sub === "import") {
+    const file = opts._[0];
+    if (!file || !existsSync(file)) {
+      console.error("Usage: claudbot forge freecad open <part.step>");
+      return 2;
+    }
+    if (!fc.running() && fc.launch()) {
+      console.log(`\n  ${C.dim}starting FreeCAD…${C.reset}`);
+    }
+    const r = await fc.send({ kind: "import", path: path.resolve(file) }, { timeoutMs: 300_000 });
+    console.log(r.ok ? `\n  ${C.green}${r.detail}${C.reset}\n` : `\n  ${C.red}${r.detail}${C.reset}\n`);
+    return r.ok ? 0 : 1;
+  }
+
+  if (sub === "exec") {
+    const file = opts._[0];
+    if (!file || !existsSync(file)) {
+      console.error("Usage: claudbot forge freecad exec <script.py>");
+      return 2;
+    }
+    process.stdout.write(`\n  running headlessly… `);
+    const r = fc.buildHeadless(path.resolve(file), { name: opts.name });
+    if (!r.ok) {
+      console.log(`${C.red}failed${C.reset}\n${C.dim}${indent(r.detail)}${C.reset}\n`);
+      return 1;
+    }
+    console.log(`${C.green}ok${C.reset}`);
+    console.log(`  ${C.dim}${r.detail} — ${r.objects} objects${C.reset}`);
+    if (r.stdout) console.log(`${C.dim}${indent(r.stdout)}${C.reset}`);
+    console.log("");
+    return 0;
+  }
+
+  if (sub === "run") {
+    const file = opts._[0];
+    if (!file || !existsSync(file)) {
+      console.error("Usage: claudbot forge freecad run <script.py>");
+      return 2;
+    }
+    return runInFreecad(fc, path.resolve(file), opts.name || path.basename(file, ".py"));
+  }
+
+  console.log(`
+  ${C.bold}claudbot forge freecad${C.reset} — build in the FreeCAD desktop app
+
+    install            copy the ForgeBridge addon into FreeCAD's Mod folder
+    doctor             is it installed, running, and answering?
+    run <script.py>    execute FreeCAD Python in the live GUI session
+    exec <script.py>   execute it headlessly — no GUI, no bridge needed
+    open <part.step>   import a file into the active document
+    uninstall          remove the addon
+`);
+  return 0;
+}
+
+/** Send a script to the live GUI session and report what came back. */
+async function runInFreecad(fc, file, name) {
+  if (!fc.running()) {
+    if (fc.launch()) {
+      console.log(`\n  ${C.dim}FreeCAD is not running — starting it. The job is queued and will`);
+      console.log(`  build once it is up and ForgeBridge has loaded.${C.reset}`);
+    }
+  }
+  process.stdout.write(`\n  building in FreeCAD… `);
+  try {
+    const r = await fc.send({ kind: "script", path: file, name }, { timeoutMs: 300_000 });
+    if (!r.ok) {
+      console.log(`${C.red}failed${C.reset}\n${C.dim}${indent(r.detail)}${C.reset}\n`);
+      return 1;
+    }
+    console.log(`${C.green}ok${C.reset}`);
+    console.log(`  ${C.dim}${r.detail} — ${r.objects} objects, in "${r.document}"${C.reset}\n`);
+    return 0;
+  } catch (err) {
+    console.log(`${C.yellow}queued${C.reset}\n  ${C.dim}${err.message}${C.reset}\n`);
+    return 1;
+  }
+}
+
 // ─── check / render / slice ──────────────────────────────────────────────────
 
 function cmdCheck(args) {
@@ -440,6 +587,7 @@ function usage() {
     make "<description>"      model a part, gate it, render it
     build <part.py|.scad>     build source you wrote yourself
     view <part.stl>           open it in an interactive 3D viewer
+    freecad <cmd>             build in the FreeCAD desktop app (install|doctor|run|exec|open)
     fusion <cmd>              build in the Fusion 360 desktop app (install|doctor|run|open)
     check <part.stl>          run the printability gates
     render <part.stl>         shaded preview PNGs
@@ -460,6 +608,7 @@ const run = {
   make: cmdMake,
   build: cmdBuild,
   view: cmdView,
+  freecad: cmdFreecad,
   fusion: cmdFusion,
   check: cmdCheck,
   render: cmdRender,

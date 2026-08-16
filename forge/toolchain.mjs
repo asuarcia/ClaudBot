@@ -91,8 +91,8 @@ const KNOWN = {
   // It also ships a real material library, which was the requirement.
   freecad: {
     win32: [
-      "C:\Program Files\FreeCAD 1.1\bin\FreeCAD.exe",
-      "C:\Program Files\FreeCAD\bin\FreeCAD.exe",
+      "C:\\Program Files\\FreeCAD 1.1\\bin\\FreeCAD.exe",
+      "C:\\Program Files\\FreeCAD\\bin\\FreeCAD.exe",
     ],
     darwin: ["/Applications/FreeCAD.app/Contents/MacOS/FreeCAD"],
     linux: ["/usr/bin/freecad", "/usr/local/bin/freecad"],
