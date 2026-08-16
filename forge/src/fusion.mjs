@@ -59,9 +59,66 @@ export function jobsDir() {
   return path.join(base, "Claudbot", "fusion-jobs");
 }
 
-/** Is Fusion 360 installed at all? */
+/**
+ * The Fusion application binary, or null.
+ *
+ * This is the only honest test for "is Fusion installed", and getting it wrong
+ * cost real work: the first version of this file checked for the API folder,
+ * which Fusion creates and which **survives an uninstall**, as does the
+ * `fusion360://` protocol handler. On this machine both were present alongside
+ * 2.1 GB of support binaries — launcher, crash reporter, render process — and
+ * no Fusion360.exe at all. Everything reported "installed" and nothing could
+ * ever have run.
+ *
+ * Fusion lives under a content-hashed webdeploy directory that changes with
+ * every update, so the folder is scanned rather than assumed. Finding the
+ * executable also gives a launch path that does not depend on the protocol
+ * handler still being registered.
+ */
+export function executable() {
+  if (process.env.FORGE_FUSION_EXE) {
+    return existsSync(process.env.FORGE_FUSION_EXE) ? process.env.FORGE_FUSION_EXE : null;
+  }
+
+  const roots = WIN
+    ? [path.join(process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local"),
+        "Autodesk", "webdeploy", "production")]
+    : ["/Applications/Autodesk Fusion 360.app/Contents/MacOS"];
+
+  const exeName = WIN ? "Fusion360.exe" : "Autodesk Fusion 360";
+
+  for (const root of roots) {
+    if (!existsSync(root)) continue;
+    if (!WIN) {
+      const direct = path.join(root, exeName);
+      if (existsSync(direct)) return direct;
+      continue;
+    }
+    let entries = [];
+    try { entries = readdirSync(root); } catch { continue; }
+    for (const dir of entries) {
+      const exe = path.join(root, dir, exeName);
+      if (existsSync(exe)) return exe;
+    }
+  }
+  return null;
+}
+
+/** Is Fusion 360 actually usable? */
 export function installed() {
-  return existsSync(apiDir());
+  return Boolean(executable());
+}
+
+/**
+ * Files left behind by an uninstall, with no application to go with them.
+ *
+ * Worth distinguishing from "never installed": it is confusing to be told
+ * Fusion is missing while a 2 GB Autodesk folder and a working protocol handler
+ * sit on the disk, and the fix is different — a reinstall over the top rather
+ * than a first install.
+ */
+export function leftovers() {
+  return !installed() && existsSync(apiDir());
 }
 
 /**
@@ -120,7 +177,11 @@ export function bridgeStatus() {
 export function install() {
   if (!installed()) {
     throw new Error(
-      `Fusion 360 does not appear to be installed — no API folder at ${apiDir()}.`,
+      leftovers()
+        ? `Fusion 360 is not installed. There are leftover files at ${apiDir()} ` +
+          "from a previous install, but no Fusion360.exe, so nothing can run. " +
+          "Reinstall Fusion (free for personal use) and try again."
+        : `Fusion 360 is not installed — no Fusion360.exe under webdeploy.`,
     );
   }
 
@@ -214,10 +275,13 @@ export const ping = () => send({ kind: "ping" }, { timeoutMs: 15_000 });
  */
 export function launch() {
   if (running()) return false;
+  const exe = executable();
+  if (!exe) return false;
   try {
-    const [cmd, args] = WIN
-      ? ["explorer.exe", ["fusion360://"]]
-      : ["open", ["-a", "Autodesk Fusion 360"]];
+    // The executable directly, not the protocol handler. The handler stays
+    // registered after an uninstall, so launching through it can silently do
+    // nothing at all.
+    const [cmd, args] = WIN ? [exe, []] : ["open", ["-a", "Autodesk Fusion 360"]];
     spawn(cmd, args, { detached: true, stdio: "ignore", windowsHide: true }).unref();
     return true;
   } catch {
@@ -229,6 +293,8 @@ export function launch() {
 export function status() {
   return {
     installed: installed(),
+    executable: executable(),
+    leftovers: leftovers(),
     apiDir: apiDir(),
     addIn: installedAt(),
     addInPresent: existsSync(installedAt()),

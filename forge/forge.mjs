@@ -242,7 +242,19 @@ async function cmdFusion(args) {
     const s = fusion.status();
     const mark = (b) => (b ? `${C.green}✓${C.reset}` : `${C.red}✗${C.reset}`);
     console.log("");
-    console.log(`  ${mark(s.installed)} Fusion 360 installed   ${C.dim}${s.apiDir}${C.reset}`);
+    console.log(`  ${mark(s.installed)} Fusion 360 installed   ${C.dim}${s.executable ?? "no Fusion360.exe found"}${C.reset}`);
+
+    // The confusing case, and the one this machine was in: an uninstall leaves
+    // the API folder, the protocol handler and gigabytes of support binaries
+    // behind. Saying only "not installed" while all that sits on disk invites
+    // an argument rather than a fix.
+    if (s.leftovers) {
+      console.log(`  ${C.yellow}⚠${C.reset}  Leftover files from a previous install are still there`);
+      console.log(`     ${C.dim}${s.apiDir}${C.reset}`);
+      console.log(`     ${C.dim}The API folder and the fusion360:// handler both survive an`);
+      console.log(`     uninstall, so their presence proves nothing. Reinstall Fusion —`);
+      console.log(`     it is free for personal use — and the add-in is already in place.${C.reset}`);
+    }
     console.log(`  ${mark(s.addInPresent)} ForgeBridge add-in     ${C.dim}${s.addIn}${C.reset}`);
     console.log(`  ${mark(s.running)} Fusion running`);
     console.log(`  ${mark(s.bridge.everRan)} bridge has started     ${C.dim}${s.bridge.lastStart ?? "never — restart Fusion and enable it"}${C.reset}`);
