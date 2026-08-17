@@ -161,24 +161,33 @@ def _run_script(job):
     # filtered out of the process stream reliably. Capturing at the Python
     # level gets exactly the script's output and nothing else.
     buffer = io.StringIO()
+    current = doc
     try:
         with contextlib.redirect_stdout(buffer):
             exec(compile(source, path, "exec"), namespace)
-            doc.recompute()
+            # Re-read the active document rather than recomputing `doc`. A
+            # script may legitimately close the document it started in, or open
+            # another — and the reference captured before exec is then dangling,
+            # so recomputing it raises and reports a script that worked as a
+            # failure. Found by a script whose whole job was closing documents.
+            current = FreeCAD.ActiveDocument
+            if current is not None:
+                current.recompute()
     except Exception:
         # The traceback verbatim, not str(e). This text is what goes back to
         # the model in Forge's retry loop, and "name 'Vector' is not defined"
         # without the line number is not enough to fix anything.
         return {"ok": False, "detail": traceback.format_exc(), "stdout": buffer.getvalue()}
 
-    after = len(doc.Objects)
+    after = len(current.Objects) if current is not None else 0
     _fit_view()
     return {
         "ok": True,
-        "detail": "built {} in {}".format(job.get("name") or "part", doc.Name),
+        "detail": "built {} in {}".format(
+            job.get("name") or "part", current.Name if current is not None else "no document"),
         "objects": after,
         "objectsAdded": after - before,
-        "document": doc.Name,
+        "document": current.Name if current is not None else None,
         "stdout": buffer.getvalue().strip(),
     }
 

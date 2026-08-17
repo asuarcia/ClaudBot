@@ -473,7 +473,11 @@ async function runInFreecad(fc, file, name) {
       return 1;
     }
     console.log(`${C.green}ok${C.reset}`);
-    console.log(`  ${C.dim}${r.detail} — ${r.objects} objects, in "${r.document}"${C.reset}\n`);
+    console.log(`  ${C.dim}${r.detail} — ${r.objects} objects, in "${r.document}"${C.reset}`);
+    // Same as `exec`. Both paths capture the script's own output, so both show
+    // it — a script that reports a measurement is the normal case.
+    if (r.stdout) console.log(`${C.dim}${indent(r.stdout)}${C.reset}`);
+    console.log("");
     return 0;
   } catch (err) {
     console.log(`${C.yellow}queued${C.reset}\n  ${C.dim}${err.message}${C.reset}\n`);
