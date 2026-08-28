@@ -30,7 +30,8 @@ const stripAnsi = (s) => s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
 // ─── menu definition ─────────────────────────────────────────────────────────
 
 const MENU_ITEMS = [
-  { label: "▶ Start Claudbot",       desc: "main chat — clean slate, no memory",         action: "start" },
+  { label: "▶ Start Claudbot",       desc: "main chat — orchestrator, clean slate",      action: "start" },
+  { label: "◆ Claude Code direct",   desc: "skip the orchestrator, straight to the TUI", action: "claude" },
   { label: "📁 Project chat",        desc: "open a repo's chat, with its memory",        action: "project" },
   { label: "🗓 Organizer",           desc: "your day: tasks, calendar & overnight news", action: "organizer" },
   { label: "🔄 Sync drive",          desc: "merge changes with your USB drive, both ways", action: "sync" },
@@ -85,7 +86,7 @@ function renderLastSession(ls, termWidth) {
 
 /**
  * Render the Claudbot menu and resolve with the chosen action string:
- * start | project | organizer | sync | resume | recall | dashboard |
+ * start | claude | project | organizer | sync | resume | recall | dashboard |
  * briefing | dream | night | doctor | update | exit
  *
  * `voice` is deliberately absent from MENU_ITEMS — the subsystem still works

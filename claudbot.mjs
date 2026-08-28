@@ -231,6 +231,9 @@ function cmdHelp() {
     menu               Interactive Claudbot menu  (default in a terminal)
     start              Launch the agent directly, skipping the menu
       --mode <mode>    Permission mode: full | auto | safe | readonly
+      --claude         Skip the orchestrator, go straight to the Claude Code TUI
+    brain              The orchestrator chat, explicitly (same as a bare start)
+      --model <id>     Which gateway model runs it (default: auto/smart)
     restart            Restart the running agent without closing the terminal
     recall             List past sessions (where you left off)
     recall last        Summarize the previous session
@@ -307,6 +310,35 @@ async function cmdDoctor() {
     }
   } else {
     fail("NIM_API_KEY not set — fallback provider and channels will not work");
+  }
+
+  // Orchestrator brain. Never a failure: the gateway is optional by design, and
+  // a missing one only means normal chats run on the NIM roster instead.
+  {
+    const { GatewayProvider, DEFAULT_GATEWAY_URL, DEFAULT_ORCHESTRATOR_MODEL, findGatewayBinary } =
+      await import("./providers/gateway.mjs");
+    const url = process.env.OMNIROUTE_URL ?? DEFAULT_GATEWAY_URL;
+    const health = await new GatewayProvider({ baseUrl: url }).health();
+    if (health.ok) {
+      ok(`OmniRoute gateway up (${health.models.length} models at ${url})`);
+      const want = process.env.OMNIROUTE_MODEL ?? DEFAULT_ORCHESTRATOR_MODEL;
+      if (health.models.includes(want)) ok(`orchestrator model "${want}" served`);
+      else warn(`orchestrator model "${want}" not in the catalog — /model to switch`);
+      // The catalog is a menu, not an inventory: most ids on it are backends
+      // this machine cannot actually reach. Only a live call proves anything.
+      warn(`catalog lists ${health.models.length} models — most are unreachable; see docs/orchestrator.md`);
+    } else {
+      const { resolveAgent } = await import("./providers/agents.mjs");
+      const fb = resolveAgent("CLAUDBOT_ORCHESTRATOR_AGENT", "agent");
+      // Installed-but-idle is the common case and the actionable one: it is one
+      // command away from working, and silently reads as "the assistant is worse
+      // today" if it is reported the same way as "not installed".
+      if (findGatewayBinary()) {
+        warn(`omniroute installed but not running — \`claudbot\` starts it, or run \`omniroute\``);
+      }
+      if (fb) ok(`no gateway — orchestrator falls back to NIM "${fb.name}"`);
+      else    warn(`no gateway at ${url} and no fallback agent registered`);
+    }
   }
 
   // Config files
@@ -883,6 +915,23 @@ function cmdRestart() {
 
 // ─── start command ───────────────────────────────────────────────────────────
 
+/**
+ * Whether a plain `claudbot` opens the orchestrator or drops straight into the
+ * Claude Code TUI.
+ *
+ * The orchestrator is the default: a normal chat turn does not need a coding
+ * agent, and putting one in front means the cheap model handles conversation
+ * and only reaches for Claude Code when a turn actually needs hands. Set
+ * CLAUDBOT_ORCHESTRATOR=0, or pass --claude, to get the old behaviour — a
+ * project chat still goes straight to Claude Code either way, because the whole
+ * point of `claudbot project` is Claude sitting inside the repo.
+ */
+function orchestratorEnabled(argv) {
+  if (argv.includes("--claude")) return false;
+  if (argv.includes("--orchestrator")) return true;
+  return process.env.CLAUDBOT_ORCHESTRATOR !== "0";
+}
+
 async function cmdStart(argv, { project = null } = {}) {
   if (!existsSync(path.join(CLAUDBOT_ROOT, "CLAUDE.md"))) {
     console.error("[claudbot] Not set up yet. Run: claudbot onboard");
@@ -906,6 +955,16 @@ async function cmdStart(argv, { project = null } = {}) {
   }
   spawnMemoryIndexer(); // keep summaries fresh on disk (not loaded into this chat)
   spawnNightSync();     // pull overnight dreams from the NUC, if configured
+
+  // The orchestrator takes over the main chat. It owns the conversation and
+  // calls Claude Code as a tool, so there is no TUI to spawn and none of the
+  // rate-limit plumbing below applies — a gateway model IS the fallback.
+  if (!project && orchestratorEnabled(argv)) {
+    const mIdx = argv.indexOf("--model");
+    if (mIdx !== -1 && argv[mIdx + 1]) process.env.OMNIROUTE_MODEL = argv[mIdx + 1];
+    const { runOrchestrator } = await import("./orchestrator.mjs");
+    return runOrchestrator({ cwd: CLAUDBOT_ROOT, mode: modeArg });
+  }
 
   if (!project && !argv.includes("--no-scratchpad-note")) {
     console.log(
@@ -1138,6 +1197,7 @@ async function cmdMenu() {
     const action = await showMenu({ lastSession });
     switch (action) {
       case "start":     return cmdStart(["--no-banner"]);
+      case "claude":    return cmdStart(["--no-banner", "--claude"]);
       // Picking a project can end without launching (nothing tracked yet, or an
       // empty answer) — fall back to the menu instead of quitting.
       case "project":
@@ -1178,6 +1238,9 @@ async function main() {
   switch (cmd) {
     case "menu":     return cmdMenu();
     case "start":    return cmdStart(rest);
+    // The orchestrator, explicitly — same thing a bare `claudbot` opens, but
+    // immune to CLAUDBOT_ORCHESTRATOR=0 and to a --claude in the args.
+    case "brain":    return cmdStart([...rest.filter((a) => a !== "--claude"), "--orchestrator"]);
     case "restart":  return cmdRestart();
     case "recall":   return cmdRecall(rest);
     case "channels": return runScript("channel-server.mjs", rest);

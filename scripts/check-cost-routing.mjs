@@ -34,13 +34,27 @@ const BACKGROUND = [
 // Runs because the user is right there. Claude is correct here.
 const FOREGROUND = [
   "claudbot.mjs",           // the interactive session itself
+  "orchestrator.mjs",       // the user is typing at it; claude_code is the point
+  "providers/claude-code.mjs", // the wrapper itself — callers are what matter
   "scripts/onboard.mjs",    // interactive setup wizard
   "voice/brain.py",         // user is speaking to it
 ];
 
 // Matches an attempt to run the CLI, not the word "claude" in prose or a path.
 const CLAUDE_INVOCATION =
-  /(spawn|spawnSync|exec|execSync|execFile|execFileSync)\s*\(\s*(["'`])claude\2|CLAUDE_BIN|["'`]claude["'`]\s*,\s*\[/;
+  /(spawn|spawnSync|exec|execSync|execFile|execFileSync)\s*\(\s*(["'`])claude\2|CLAUDE_BIN|["'`]claude["'`]\s*\,\s*\[/;
+
+/**
+ * Importing the wrapper is spawning the binary.
+ *
+ * The original check looked for `spawn("claude", …)` and nothing else, which
+ * was airtight while that was the only way to reach the CLI. Wrapping it in
+ * providers/claude-code.mjs made the guard bypassable by accident: a background
+ * script that imports ClaudeCodeProvider bills the plan exactly the same way
+ * and matched none of the patterns above.
+ */
+const CLAUDE_WRAPPER_IMPORT =
+  /(?:from|import|require\s*\(\s*)\s*["'`][^"'`]*providers\/claude-code\.mjs["'`]|\bClaudeCodeProvider\b/;
 
 const C = { reset: "\x1b[0m", red: "\x1b[31m", green: "\x1b[32m", dim: "\x1b[2m", bold: "\x1b[1m" };
 
@@ -60,13 +74,14 @@ for (const rel of BACKGROUND) {
   const offenders = source
     .split("\n")
     .map((line, i) => ({ line: line.trim(), n: i + 1 }))
-    .filter(({ line }) => CLAUDE_INVOCATION.test(line) && !line.startsWith("//") && !line.startsWith("*"));
+    .filter(({ line }) => !line.startsWith("//") && !line.startsWith("*"))
+    .filter(({ line }) => CLAUDE_INVOCATION.test(line) || CLAUDE_WRAPPER_IMPORT.test(line));
 
   if (offenders.length === 0) {
     console.log(`  ${C.green}ok${C.reset}    ${rel} ${C.dim}— NIM only${C.reset}`);
   } else {
     failures += offenders.length;
-    console.log(`  ${C.red}FAIL${C.reset}  ${rel} spawns the claude binary:`);
+    console.log(`  ${C.red}FAIL${C.reset}  ${rel} reaches the claude binary:`);
     for (const o of offenders) console.log(`          ${C.dim}${rel}:${o.n}${C.reset} ${o.line.slice(0, 100)}`);
   }
 }

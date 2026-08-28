@@ -130,3 +130,58 @@ agents:
       fast). Best for: analyzing long documents, reviewing or sweeping large
       codebases, log/transcript analysis, and any task where the input is too
       big for the other agents.
+
+  # ── OmniRoute gateway agents ────────────────────────────────────────────────
+  #
+  # These do not go to NVIDIA. They go to the local OmniRoute gateway on
+  # loopback, which needs no API key (hence apiKeyEnv: null) and costs nothing.
+  # `claudbot` starts the gateway itself if it is installed and not running.
+  #
+  # The gateway advertises 115 models. Do not trust that number — it is a
+  # catalog, not an inventory. Probed model by model on 2026-08-27, 71 of the 73
+  # concrete ids were unreachable and the failures were structural, not
+  # transient:
+  #
+  #   aug/*   (28, incl. opus4.8 / sonnet5 / gpt5.6)  502 — OmniRoute shells out
+  #           to an `auggie` CLI that is not installed on this machine.
+  #   tllm/*  (26, incl. CLAUDE_4_6_SONNET, gemini_3_pro)  403 — "blocked by
+  #           Vercel for this server egress IP"; needs a residential proxy.
+  #   the rest  400/401/429 — rate-limited, retired, or never served here.
+  #
+  # Two answer: oc/hy3-free and oc/nemotron-3-ultra-free. Every `auto/*` pool
+  # tested — smart, chat, cheap, best-free, even `offline` — failed over onto
+  # hy3-free, so the pools are not 38 routes, they are one route with 38 names.
+  # Re-probe before adding an id here; a registry entry that 404s costs a call
+  # and a retry before anything else can be tried.
+
+  - name: gateway
+    # The pool, not the backend, deliberately. It resolves to hy3-free today,
+    # but a pool id keeps working when that changes and a pinned id does not.
+    # auto/best-chat over auto/smart on measurement: 6/6 successful turns and
+    # 6/6 correctly routed, while auto/smart 429'd on a plain chat turn in the
+    # first round ("Felo thread creation failed"). Median 2.4s.
+    model: auto/best-chat
+    endpoint: http://localhost:20128/v1
+    apiKeyEnv: null
+    jobDescription: >
+      Free general-purpose chat and text work through the local OmniRoute
+      gateway. Best for: summaries, drafting, classification, extraction,
+      rewriting, and ordinary questions. Prefer this over `fast` whenever the
+      gateway is up — it is the same class of work at no cost. It has no
+      filesystem, no web and no memory between calls, so pass full context.
+
+  - name: gateway-ultra
+    # Nemotron 3 Ultra 550B, free, via opencode. Slower than the pool (4.8s
+    # median) and 5/6 rather than 6/6 — one 502 "upstream returned an empty
+    # response". Worth it when the reasoning matters more than the latency;
+    # it is the same model class as the paid `researcher` entry, for nothing.
+    model: oc/nemotron-3-ultra-free
+    endpoint: http://localhost:20128/v1
+    apiKeyEnv: null
+    maxTokens: 8192
+    jobDescription: >
+      Free deep reasoning through the local OmniRoute gateway (Nemotron 3 Ultra,
+      550B MoE). Best for: multi-step reasoning, planning, and trade-off
+      analysis where depth beats speed. Same role as `researcher` at no cost —
+      try this first and fall back to `researcher` if the gateway is down. No
+      web access: live research belongs in Claude's own WebSearch.

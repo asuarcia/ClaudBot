@@ -17,16 +17,20 @@ const CLAUDBOT_ROOT = path.join(
   "..",
   ".claudbot"
 );
-const REGISTRY_PATH = path.join(CLAUDBOT_ROOT, "agents.yaml");
+// Overridable so the dispatch path can be tested against a stub endpoint —
+// every agent in the real registry points at a live third party, and a test
+// that calls one of those is a test of NVIDIA's uptime, not of this code.
+const registryPath = () => process.env.CLAUDBOT_AGENTS_FILE || path.join(CLAUDBOT_ROOT, "agents.yaml");
 const USAGE_PATH    = path.join(CLAUDBOT_ROOT, "usage.json");
 
 // Safe agent name: lowercase letters, numbers, hyphens only.
 const SAFE_NAME = /^[a-z0-9-]{1,64}$/;
 
 export function loadAgents() {
-  if (!existsSync(REGISTRY_PATH)) return [];
+  const p = registryPath();
+  if (!existsSync(p)) return [];
   try {
-    return yamlParse(readFileSync(REGISTRY_PATH, "utf8"))?.agents ?? [];
+    return yamlParse(readFileSync(p, "utf8"))?.agents ?? [];
   } catch {
     return [];
   }
@@ -143,8 +147,20 @@ function recordUsage(name, usage) {
  * succeeds seconds later. 4xx other than 429 is our mistake and will fail
  * identically forever: 410 means the model was retired, 401 means the key is
  * wrong. Retrying those wastes the caller's time and hides the real message.
+ *
+ * The body clause is for gateway endpoints. An `auto/*` id on OmniRoute is a
+ * POOL, not a model, and a request can die because the one member it happened
+ * to pick is broken while healthy ones sit behind it — observed live:
+ * `oc/north-mini-code-free` 401s with "Model … is not supported" inside a pool
+ * whose next member answers fine. Against a single endpoint a 401 is terminal;
+ * against a pool it usually is not. OmniRoute marks the difference itself with
+ * `"recovery":{"action":"retry"}`, so honour that and fall back to the
+ * status-code rules when it is absent.
  */
-const RETRYABLE = (status) => status === 429 || (status >= 500 && status < 600);
+const RETRYABLE = (status, bodyText = "") =>
+  status === 429 ||
+  (status >= 500 && status < 600) ||
+  /"action"\s*:\s*"retry"/.test(bodyText);
 
 /** Attempts, and how long to wait between them. Doubling, from one second. */
 const RETRIES = 3;
@@ -154,7 +170,7 @@ export async function runAgent(name, prompt, systemPrompt) {
   const agent = findAgent(name);
 
   const usesKey = agent.apiKeyEnv && agent.apiKeyEnv !== "null" && agent.apiKeyEnv !== null;
-  const apiKey = usesKey ? process.env[agent.apiKeyEnv] : "none";
+  const apiKey = usesKey ? process.env[agent.apiKeyEnv] : undefined;
   if (usesKey && !apiKey) {
     throw new Error(
       `Agent "${name}" needs env var "${agent.apiKeyEnv}", which is not set.`
@@ -167,7 +183,21 @@ export async function runAgent(name, prompt, systemPrompt) {
   if (system) messages.push({ role: "system", content: system });
   messages.push({ role: "user", content: prompt });
 
-  const body = JSON.stringify({ model: agent.model, messages, max_tokens: agentMaxTokens(agent) });
+  const body = JSON.stringify({
+    model: agent.model,
+    messages,
+    max_tokens: agentMaxTokens(agent),
+    // Explicit, not defaulted. Omitting the field is NOT the same as false on a
+    // gateway: OmniRoute streams SSE by default, so a keyless local agent would
+    // get back `data: {...}` lines and res.json() would throw on the first one.
+    stream: false,
+  });
+
+  // Only when there is a key. A local gateway serves loopback without auth, and
+  // `Bearer none` is worse than no header at all — some upstreams reject a
+  // malformed key with a 401 that reads like a configuration problem.
+  const headers = { "Content-Type": "application/json" };
+  if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
 
   let res;
   for (let attempt = 1; ; attempt++) {
@@ -176,15 +206,7 @@ export async function runAgent(name, prompt, systemPrompt) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), agentTimeoutMs());
     try {
-      res = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body,
-        signal: controller.signal,
-      });
+      res = await fetch(url, { method: "POST", headers, body, signal: controller.signal });
     } catch (err) {
       if (err.name === "AbortError") {
         throw new Error(`Agent "${name}" timed out after ${agentTimeoutMs() / 1000}s.`);
@@ -195,19 +217,38 @@ export async function runAgent(name, prompt, systemPrompt) {
     }
 
     if (res.ok) break;
-    if (attempt >= RETRIES || !RETRYABLE(res.status)) {
-      const text = await res.text().catch(() => "(no body)");
+
+    // Read the body before deciding: on a gateway the retry verdict is IN the
+    // body, not just the status. Reading it also drains the connection for reuse.
+    const text = await res.text().catch(() => "(no body)");
+    if (attempt >= RETRIES || !RETRYABLE(res.status, text)) {
       throw new Error(`Agent "${name}" HTTP ${res.status}: ${text}`);
     }
-    // Drain the body before the next attempt so the connection can be reused.
-    await res.text().catch(() => {});
     await new Promise((r) => setTimeout(r, backoffMs(attempt)));
   }
 
   const data = await res.json();
   recordUsage(name, data?.usage);
-  const content = data?.choices?.[0]?.message?.content;
-  if (!content) throw new Error(`Agent "${name}" returned an empty response.`);
+
+  // `content` is null on reasoning models, which put their trace in a separate
+  // `reasoning_content` field and leave content null until they are done. A
+  // model that spent its whole completion budget thinking returns exactly that
+  // shape, and reporting it as "empty response" throws away the one thing it
+  // did produce. Prefer real content; fall back to the trace rather than
+  // nothing, and say which finish reason got us there.
+  const message = data?.choices?.[0]?.message;
+  const content =
+    (typeof message?.content === "string" && message.content.trim() && message.content) ||
+    (typeof message?.reasoning_content === "string" && message.reasoning_content.trim() &&
+      message.reasoning_content);
+
+  if (!content) {
+    const why = data?.choices?.[0]?.finish_reason;
+    throw new Error(
+      `Agent "${name}" returned an empty response` +
+        (why ? ` (finish_reason: ${why}${why === "length" ? " — raise maxTokens in agents.yaml" : ""}).` : "."),
+    );
+  }
   const clean = sanitizeAgentOutput(content);
   return clean || sanitizeAgentOutput(content.replace(/<\/?think(?:ing)?>/gi, ""));
 }
