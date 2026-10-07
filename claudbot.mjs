@@ -233,7 +233,7 @@ function cmdHelp() {
       --mode <mode>    Permission mode: full | auto | safe | readonly
       --claude         Skip the orchestrator, go straight to the Claude Code TUI
     brain              The orchestrator chat, explicitly (same as a bare start)
-      --model <id>     Which gateway model runs it (default: auto/smart)
+      --model <id>     Which gateway model runs it (default: auto/best-chat)
     restart            Restart the running agent without closing the terminal
     recall             List past sessions (where you left off)
     recall last        Summarize the previous session
@@ -318,15 +318,16 @@ async function cmdDoctor() {
     const { GatewayProvider, DEFAULT_GATEWAY_URL, DEFAULT_ORCHESTRATOR_MODEL, findGatewayBinary } =
       await import("./providers/gateway.mjs");
     const url = process.env.OMNIROUTE_URL ?? DEFAULT_GATEWAY_URL;
-    const health = await new GatewayProvider({ baseUrl: url }).health();
+    const gw = new GatewayProvider({ baseUrl: url });
+    const health = await gw.health();
     if (health.ok) {
-      ok(`OmniRoute gateway up (${health.models.length} models at ${url})`);
+      ok(`OmniRoute gateway up (${health.models.length} models listed at ${url})`);
+      // The catalog is a menu, not an inventory — on 2026-10-07 it listed 115
+      // ids while serving none. Only a live call proves the brain will answer.
       const want = process.env.OMNIROUTE_MODEL ?? DEFAULT_ORCHESTRATOR_MODEL;
-      if (health.models.includes(want)) ok(`orchestrator model "${want}" served`);
-      else warn(`orchestrator model "${want}" not in the catalog — /model to switch`);
-      // The catalog is a menu, not an inventory: most ids on it are backends
-      // this machine cannot actually reach. Only a live call proves anything.
-      warn(`catalog lists ${health.models.length} models — most are unreachable; see docs/orchestrator.md`);
+      const probe = await gw.serves(want);
+      if (probe.ok) ok(`orchestrator model "${want}" answers (${(probe.ms / 1000).toFixed(1)}s)`);
+      else warn(`orchestrator model "${want}" does not answer — ${probe.error}. Chats fall back to NIM; add a provider key in the OmniRoute dashboard (docs/orchestrator.md)`);
     } else {
       const { resolveAgent } = await import("./providers/agents.mjs");
       const fb = resolveAgent("CLAUDBOT_ORCHESTRATOR_AGENT", "agent");

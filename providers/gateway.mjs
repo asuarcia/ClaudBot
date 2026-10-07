@@ -64,6 +64,9 @@ const DEFAULT_MAX_TOKENS = 8192;
 /** Health checks must be snappy: a gateway that can't answer in 4s is not usable. */
 const HEALTH_TIMEOUT_MS = 4000;
 
+/** A serve probe is a real completion, so it gets longer — but not a turn's worth. */
+const PROBE_TIMEOUT_MS = 30_000;
+
 /** Attempts per completion, including the first. See the note on #post(). */
 const POST_RETRIES = 3;
 
@@ -79,6 +82,23 @@ const POST_RETRIES = 3;
 function retryable(status, bodyText = "") {
   if (status === 429 || (status >= 500 && status < 600)) return true;
   return /"action"\s*:\s*"retry"/.test(bodyText);
+}
+
+/**
+ * The one line of an OmniRoute error body a person needs.
+ *
+ * The raw body is a kilobyte of routing diagnostics — pool size, exclusions,
+ * attempt order, recovery hints — printed mid-conversation as `⚠ Gateway HTTP
+ * 403: {"error":{"message":…`, truncated before it says anything useful. The
+ * `error.message` field alone already names the provider's reason and the
+ * member that failed. Falls back to the raw text for a non-JSON body.
+ */
+export function summarizeGatewayError(text = "") {
+  try {
+    const msg = JSON.parse(text)?.error?.message;
+    if (typeof msg === "string" && msg) return msg.replace(/^\[\d{3}\]:\s*/, "").slice(0, 300);
+  } catch { /* not JSON — a proxy page or a bare string */ }
+  return String(text).slice(0, 300);
 }
 
 export class GatewayProvider extends BaseProvider {
@@ -121,6 +141,45 @@ export class GatewayProvider extends BaseProvider {
       return { ok: true, models };
     } catch (err) {
       return { ok: false, error: err.message };
+    }
+  }
+
+  /**
+   * Can this gateway actually answer with `model`? One real, tiny completion.
+   *
+   * health() only proves something is listening, and on OmniRoute that proves
+   * very little: on 2026-10-07 `/v1/models` listed 115 ids while every member
+   * of every `auto/*` pool was refusing requests — OpenCode had locked its free
+   * tier to its own client, and that keyless connection was the only one
+   * configured. A gateway that is up but serves nothing is worse than none: each
+   * turn spends ~5s and three retries before failing. Only a call tells them apart.
+   *
+   * One attempt, no retries — a pool that cannot answer the first time at
+   * startup is not the brain to start a conversation on. Never throws.
+   *
+   * @returns {Promise<{ok: boolean, ms: number, error?: string}>}
+   */
+  async serves(model = this.#model, { timeoutMs = PROBE_TIMEOUT_MS } = {}) {
+    const started = Date.now();
+    try {
+      const res = await this.#fetch(`${this.#baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: this.#headers({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          model,
+          messages: [{ role: "user", content: "Reply with: ok" }],
+          // Not tiny: a reasoning backend spends its budget thinking first,
+          // and a "length" finish with null content is still a served request.
+          max_tokens: 256,
+          stream: false,
+        }),
+      }, timeoutMs);
+      const ms = Date.now() - started;
+      if (res.ok) return { ok: true, ms };
+      const text = await res.text().catch(() => "");
+      return { ok: false, ms, error: `HTTP ${res.status}: ${summarizeGatewayError(text)}` };
+    } catch (err) {
+      return { ok: false, ms: Date.now() - started, error: err.message };
     }
   }
 
@@ -242,9 +301,9 @@ export class GatewayProvider extends BaseProvider {
       }
 
       if (res.status === 429) {
-        throw new RateLimitError(`Gateway rate limit (HTTP 429): ${text.slice(0, 300)}`);
+        throw new RateLimitError(`Gateway rate limit (HTTP 429): ${summarizeGatewayError(text)}`);
       }
-      throw new ProviderError(`Gateway HTTP ${res.status}: ${text.slice(0, 500)}`, { code: res.status });
+      throw new ProviderError(`Gateway HTTP ${res.status}: ${summarizeGatewayError(text)}`, { code: res.status });
     }
   }
 
@@ -351,8 +410,12 @@ export async function ensureGateway({
   // Detached and fully unhooked: the gateway has to outlive this process, or
   // every `claudbot` would pay the cold-start cost again. `shell: true` because
   // the PATH entry on Windows is a .cmd shim, which CreateProcess cannot exec.
+  //
+  // `serve --no-open --no-tray`, never the bare command: bare `omniroute` opens
+  // the dashboard in a browser on boot, which is a background launcher taking
+  // over the desktop a minute after the user stopped looking at it.
   try {
-    const child = spawn(bin, [], {
+    const child = spawn(bin, ["serve", "--no-open", "--no-tray"], {
       detached: true,
       stdio: "ignore",
       shell: process.platform === "win32",

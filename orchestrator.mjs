@@ -97,6 +97,15 @@ function brainFromAgent(agent, via) {
  *      whole point: an installed-but-not-running gateway used to fall silently
  *      through to step 3, which reads as "my assistant got worse today".
  *   3. A registered NIM agent, so a machine with no gateway still works.
+ *
+ * "The gateway" means one that ANSWERS, not one that is listening: OmniRoute
+ * lists 115 models while able to serve none of them (2026-10-07, every pool
+ * member refusing), so step 2 makes one real call before it is trusted.
+ *
+ * And it never makes the user sit through a cold boot. OmniRoute takes about a
+ * minute to answer after it starts; when it is down, the conversation opens on
+ * the NIM fallback immediately and `pending` resolves to the gateway brain if
+ * and when it turns out to serve. The caller swaps between turns.
  */
 async function resolveBrain({ onProgress } = {}) {
   const named = process.env.CLAUDBOT_BRAIN?.trim();
@@ -108,25 +117,48 @@ async function resolveBrain({ onProgress } = {}) {
 
   const url = process.env.OMNIROUTE_URL ?? DEFAULT_GATEWAY_URL;
   const model = process.env.OMNIROUTE_MODEL ?? DEFAULT_MODEL;
+  const fb = agents.resolveAgent("CLAUDBOT_ORCHESTRATOR_AGENT", "agent");
+  const fallback = fb ? brainFromAgent(fb, "nim") : null;
 
-  const gw = await ensureGateway({ baseUrl: url, onProgress });
-  if (gw.ok) {
+  // Up AND serving → the gateway. Anything else is a reason, not a brain.
+  const tryGateway = async (gw) => {
+    if (!gw.ok) return { brain: null, reason: gw.reason };
+    const provider = new GatewayProvider({ baseUrl: url, model });
+    const probe = await provider.serves(model);
+    if (!probe.ok) return { brain: null, reason: `up, but ${model} serves nothing — ${probe.error}` };
     return {
-      provider: new GatewayProvider({ baseUrl: url, model }),
-      model,
-      via: "omniroute",
-      catalog: gw.models ?? [],
-      url,
-      startedGateway: gw.started,
+      brain: {
+        provider, model, via: "omniroute", catalog: gw.models ?? [], url,
+        startedGateway: gw.started, probeMs: probe.ms,
+      },
     };
+  };
+
+  const first = await new GatewayProvider({ baseUrl: url }).health();
+  if (first.ok) {
+    onProgress?.("checking the gateway can answer");
+    const { brain, reason } = await tryGateway({ ok: true, started: false, models: first.models });
+    if (brain) return { ...brain, fallback };
+    if (fallback) return { ...fallback, gatewayError: reason, gatewayUrl: url };
+    return { provider: null, reason };
   }
 
-  // No gateway. Fall back to a registered NIM agent — same OpenAI-compatible
-  // shape, so the identical client class works with different coordinates.
-  const fb = agents.resolveAgent("CLAUDBOT_ORCHESTRATOR_AGENT", "agent");
-  if (!fb) return { provider: null, reason: gw.reason };
+  // Down. With a fallback, boot the gateway in the background and open on the
+  // fallback now; without one there is nothing to talk to, so wait as before.
+  const booting = ensureGateway({ baseUrl: url, onProgress: fallback ? undefined : onProgress })
+    .then(tryGateway);
 
-  return { ...brainFromAgent(fb, "nim"), gatewayError: gw.reason };
+  if (!fallback) {
+    const { brain, reason } = await booting;
+    return brain ?? { provider: null, reason };
+  }
+
+  return {
+    ...fallback,
+    gatewayUrl: url,
+    gatewayError: "gateway down — starting it in the background",
+    pending: booting.then(({ brain }) => (brain ? { ...brain, fallback } : null)),
+  };
 }
 
 // ─── the tools the orchestrator can reach for ────────────────────────────────
@@ -292,11 +324,11 @@ export async function runOrchestrator({ cwd = CLAUDBOT_ROOT, mode = "full" } = {
   // reason belongs on screen rather than in a log nobody reads.
   const viaLabel =
     brain.via === "omniroute"
-      ? `${C.green}OmniRoute${C.reset} ${C.dim}${brain.catalog.length} models` +
+      ? `${C.green}OmniRoute${C.reset} ${C.dim}answered in ${(brain.probeMs / 1000).toFixed(1)}s` +
         `${brain.startedGateway ? " · started just now" : ""}${C.reset}`
       : brain.via.startsWith("agent:")
         ? `${C.green}${brain.via.slice(6)}${C.reset} ${C.dim}(CLAUDBOT_BRAIN)${C.reset}`
-        : `${C.yellow}NIM${C.reset} ${C.dim}(no gateway — ${brain.gatewayError})${C.reset}`;
+        : `${C.yellow}NIM${C.reset} ${C.dim}(gateway: ${brain.gatewayError})${C.reset}`;
 
   console.log(`
   ${C.bold}${C.cyan}◆ CLAUDBOT${C.reset}  ${C.dim}│${C.reset}  orchestrator mode
@@ -311,6 +343,46 @@ export async function runOrchestrator({ cwd = CLAUDBOT_ROOT, mode = "full" } = {
   const system = buildSystemPrompt(roster);
   const history = [{ role: "system", content: system }];
   let verbose = false;
+
+  // Where `/model <id>` points. Kept apart from brain.url because the brain can
+  // be the NIM fallback, and switching model there must go back to the gateway.
+  const gatewayUrl =
+    brain.via === "omniroute" ? brain.url : (brain.gatewayUrl ?? process.env.OMNIROUTE_URL ?? DEFAULT_GATEWAY_URL);
+
+  // The gateway finished booting while the user was already talking. Swapped in
+  // between turns only — changing models halfway through a tool loop would
+  // hand one model's tool calls to another model's reasoning.
+  let upgrade = null;
+  brain.pending?.then((b) => { if (b) upgrade = b; }).catch(() => {});
+  const applyUpgrade = () => {
+    if (!upgrade) return;
+    Object.assign(brain, upgrade);
+    upgrade = null;
+    console.log(`  ${C.green}✓${C.reset} ${C.dim}gateway is answering — orchestrator now on ${brain.model} via OmniRoute${C.reset}\n`);
+  };
+
+  /**
+   * One model call, failing over to the NIM fallback if the gateway breaks.
+   *
+   * A gateway that served at startup can stop: a free provider changes its
+   * terms, a pool loses its last working member. Without this every later turn
+   * prints the same 403, five seconds and three retries at a time. The demotion
+   * lasts the session — `/model <id>` puts the gateway back on purpose.
+   */
+  async function chatWithFailover(messages) {
+    try {
+      return await brain.provider.chat(messages, { tools: TOOLS });
+    } catch (e) {
+      if (brain.via !== "omniroute" || !brain.fallback) throw e;
+      const fb = brain.fallback;
+      console.log(
+        `  ${C.yellow}⚠${C.reset} ${C.dim}gateway failed (${e.message}) — ` +
+        `switching to ${fb.via.slice(4)} for this session · /model ${brain.model} to retry it${C.reset}`,
+      );
+      Object.assign(brain, { ...fb, fallback: null });
+      return await brain.provider.chat(messages, { tools: TOOLS });
+    }
+  }
 
   // ── tool dispatch ──────────────────────────────────────────────────────────
 
@@ -361,13 +433,14 @@ export async function runOrchestrator({ cwd = CLAUDBOT_ROOT, mode = "full" } = {
   const MAX_HOPS = 8;
 
   async function turn(userText) {
+    applyUpgrade();
     const messages = [...history, { role: "user", content: userText }];
 
     for (let hop = 0; hop < MAX_HOPS; hop++) {
       const stop = spinner(`${C.dim}${brain.model}${C.reset}${C.dim} thinking`);
       let msg;
       try {
-        msg = await brain.provider.chat(messages, { tools: TOOLS });
+        msg = await chatWithFailover(messages);
       } finally {
         stop();
       }
@@ -471,13 +544,26 @@ export async function runOrchestrator({ cwd = CLAUDBOT_ROOT, mode = "full" } = {
         if (!modelCmd[1]) {
           console.log(`\n  ${C.bold}${brain.model}${C.reset} ${C.dim}via ${brain.via}${C.reset}\n`);
         } else {
-          brain.model = modelCmd[1];
-          brain.provider = new GatewayProvider({
-            baseUrl: brain.url,
+          // Probe before switching: a model id on the catalog is not a model
+          // the gateway can serve, and finding out on the next real turn costs
+          // the user a failed reply instead of a one-line warning here.
+          const provider = new GatewayProvider({
+            baseUrl: gatewayUrl,
             apiKey: process.env.OMNIROUTE_API_KEY,
-            model: brain.model,
+            model: modelCmd[1],
           });
-          console.log(`\n  ${C.green}✓${C.reset} orchestrator now on ${C.bold}${brain.model}${C.reset}\n`);
+          const stop = spinner(`${C.dim}checking ${modelCmd[1]} answers${C.reset}`);
+          const probe = await provider.serves();
+          stop();
+          if (!probe.ok) {
+            console.log(`\n  ${C.yellow}⚠${C.reset} ${modelCmd[1]} does not answer — ${probe.error}\n  ${C.dim}still on ${brain.model}${C.reset}\n`);
+          } else {
+            // Keep (or recover) a NIM fallback so a later gateway failure can
+            // still fail over, even after a demotion cleared it.
+            const fb = brain.via === "omniroute" ? brain.fallback : { ...brain, fallback: undefined };
+            Object.assign(brain, { provider, model: modelCmd[1], via: "omniroute", url: gatewayUrl, fallback: fb });
+            console.log(`\n  ${C.green}✓${C.reset} orchestrator now on ${C.bold}${brain.model}${C.reset} ${C.dim}(answered in ${(probe.ms / 1000).toFixed(1)}s)${C.reset}\n`);
+          }
         }
         return prompt();
       }

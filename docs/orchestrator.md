@@ -110,15 +110,81 @@ tool-calling turns each, 2026-08-27:
 `17 × 23` itself. A pool id rather than `oc/hy3-free` directly, deliberately: the
 pool keeps working when the backend behind it changes, and a pinned id does not.
 
+### 2026-10-07: the last working route closed
+
+Both models above came through one keyless connection, `opencode`, and it was
+the **only** connection configured. OpenCode then locked its free tier to its
+own client and retired the rest — every member of every pool, re-probed:
+
+| Member | Result |
+|---|---|
+| `oc/big-pickle`, `oc/nemotron-3-ultra-free` | `403` "OpenCode's free tier can only be used from within OpenCode" |
+| `oc/hy3-free`, `oc/deepseek-v4-flash-free`, `oc/mimo-v2.5-free`, `oc/north-mini-code-free` | `401` "Model … is not supported" |
+| `felo/*` (the rest of every pool) | `400`/`429` "Felo thread creation failed" |
+
+`/v1/models` still listed 115 ids and `health()` still said yes. Each chat turn
+spent ~5s and three retries before printing a kilobyte of JSON.
+
+OmniRoute 3.8.51+ has a workaround that dresses requests up as the OpenCode
+client (`opencodeFreeTierContract.ts`). Claudbot deliberately does **not** rely
+on it: it exists to get around the vendor's restriction, OmniRoute's own ToS
+audit rates `opencode` "avoid", and a route that depends on impersonation can
+close again at any time.
+
+### Making the gateway worth running
+
+OmniRoute's value is failover **across providers**. With no keys it has
+nothing to fail over between. The pools fill with real members only when API
+keys are added, and in 3.8.49 that is **dashboard-only** — verified, not taken
+from the docs:
+
+- `NVIDIA_API_KEY` in the gateway's environment is documented but ignored for
+  chat: `nvidia/…` returns `404 No active credentials for provider: nvidia` and
+  the pools are unchanged.
+- `provider-credentials.json` only overrides OAuth client ids.
+- `/api/providers` requires the dashboard login; the CLI has no `add`.
+
+So: open `http://localhost:20128` → Providers → Add API Key. In priority order:
+
+| Provider | Key | Why |
+|---|---|---|
+| `nvidia` | the existing `NIM_API_KEY` | already paid for; ~40 RPM, 70+ models |
+| `groq` | free at console.groq.com | fast; per-model 200K tokens/day |
+| `gemini` | free at aistudio.google.com | Flash family, no published cap |
+| `openrouter` | free | `:free` models, 50 req/day (1000 after a one-time $10) |
+
+With only `nvidia` connected the gateway is the NIM roster plus a hop and a
+one-minute boot — it pays off from the second provider on. Verify with
+`claudbot doctor`, which now makes a real call rather than reading the catalog.
+
+### How Claudbot copes when it does not answer
+
+All client-side, so it holds whatever OmniRoute does next:
+
+- **Probe, don't list.** `GatewayProvider.serves()` makes one real completion.
+  Startup, `doctor`, and `/model <id>` all use it, so a dead model is a one-line
+  warning, not a failed turn.
+- **Never wait for the boot.** If the gateway is down, the conversation opens
+  on the NIM fallback immediately, the gateway boots in the background, and the
+  brain switches over between turns once it answers.
+- **Fail over mid-session.** A gateway turn that fails after retries is replayed
+  on the NIM fallback, which then holds for the session. `/model <id>` goes back.
+- **Roster fallback.** `gateway` falls back to `fast`, `gateway-ultra` to
+  `researcher` (the `fallback:` field in `agents.yaml`, one hop, with a note on
+  the output saying so).
+- **Readable errors.** Only OmniRoute's `error.message` is shown.
+- **No browser.** The autostart runs `omniroute serve --no-open --no-tray`;
+  the bare command opens the dashboard on every boot.
+
 ## Gateway models as roster agents
 
 The gateway is not only the brain's connection — it is also two entries in
 `.claudbot/agents.yaml`, so `run_agent` can spend nothing instead of NIM credit:
 
-| Agent | Model | Replaces |
+| Agent | Model | Replaces (and falls back to) |
 |---|---|---|
 | `gateway` | `auto/best-chat` | `fast` — summaries, drafting, classification, extraction |
-| `gateway-ultra` | `oc/nemotron-3-ultra-free` | `researcher` — reasoning, planning, trade-offs |
+| `gateway-ultra` | `auto/smart` | `researcher` — reasoning, planning, trade-offs |
 
 They carry `apiKeyEnv: null` because loopback needs no key, and that is what
 made them impossible before: `runAgent` was written against NIM and inherited
@@ -243,7 +309,7 @@ tool-call — and small free models sometimes do — delegation still works by h
 | Variable | Default | Meaning |
 |---|---|---|
 | `OMNIROUTE_URL` | `http://localhost:20128/v1` | Gateway base URL |
-| `OMNIROUTE_MODEL` | `auto/smart` | Which model or pool runs the orchestrator |
+| `OMNIROUTE_MODEL` | `auto/best-chat` | Which model or pool runs the orchestrator |
 | `OMNIROUTE_API_KEY` | *(unset)* | Only needed for a non-loopback gateway |
 | `CLAUDBOT_ORCHESTRATOR` | `1` | `0` makes a bare `claudbot` open Claude Code |
 | `CLAUDBOT_ORCHESTRATOR_AGENT` | `agent` | NIM agent used when no gateway answers |

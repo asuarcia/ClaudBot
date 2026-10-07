@@ -9,6 +9,7 @@
 #   endpoint    - base URL of any OpenAI-compatible API
 #   apiKeyEnv   - env var holding the API key (null for local endpoints)
 #   jobDescription - what this agent is good at (guides Claude's routing)
+#   fallback    - optional: agent to retry on once if this one fails (one hop)
 #
 # Models verified against the live build.nvidia.com/models catalog by calling
 # each one (2026-08-15). All run on the NVIDIA NIM OpenAI-compatible endpoint.
@@ -148,9 +149,15 @@ agents:
   #           Vercel for this server egress IP"; needs a residential proxy.
   #   the rest  400/401/429 — rate-limited, retired, or never served here.
   #
-  # Two answer: oc/hy3-free and oc/nemotron-3-ultra-free. Every `auto/*` pool
-  # tested — smart, chat, cheap, best-free, even `offline` — failed over onto
-  # hy3-free, so the pools are not 38 routes, they are one route with 38 names.
+  # Two answered then: oc/hy3-free and oc/nemotron-3-ultra-free, both through
+  # the keyless `opencode` connection. On 2026-10-07 that went too — OpenCode
+  # locked its free tier to its own client (403 "can only be used from within
+  # OpenCode") and retired the rest (401 "not supported"), and since it was the
+  # ONLY connection configured, every pool went dark at once.
+  #
+  # Hence `fallback:` on both entries: the gateway is the free path, never the
+  # only one. Real pool members come from provider keys added in the OmniRoute
+  # dashboard — see docs/orchestrator.md, "Making the gateway worth running".
   # Re-probe before adding an id here; a registry entry that 404s costs a call
   # and a retry before anything else can be tried.
 
@@ -163,6 +170,7 @@ agents:
     model: auto/best-chat
     endpoint: http://localhost:20128/v1
     apiKeyEnv: null
+    fallback: fast
     jobDescription: >
       Free general-purpose chat and text work through the local OmniRoute
       gateway. Best for: summaries, drafting, classification, extraction,
@@ -171,13 +179,14 @@ agents:
       filesystem, no web and no memory between calls, so pass full context.
 
   - name: gateway-ultra
-    # Nemotron 3 Ultra 550B, free, via opencode. Slower than the pool (4.8s
-    # median) and 5/6 rather than 6/6 — one 502 "upstream returned an empty
-    # response". Worth it when the reasoning matters more than the latency;
-    # it is the same model class as the paid `researcher` entry, for nothing.
-    model: oc/nemotron-3-ultra-free
+    # Was oc/nemotron-3-ultra-free, pinned, until OpenCode closed its free tier
+    # to third-party clients (2026-10-07). A pool now, for the same reason
+    # `gateway` uses one: auto/smart is OmniRoute's quality-first pool and keeps
+    # working as connected providers change, where a pinned id just dies.
+    model: auto/smart
     endpoint: http://localhost:20128/v1
     apiKeyEnv: null
+    fallback: researcher
     maxTokens: 8192
     jobDescription: >
       Free deep reasoning through the local OmniRoute gateway (Nemotron 3 Ultra,

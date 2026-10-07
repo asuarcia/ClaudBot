@@ -269,3 +269,140 @@ test("runAgent names the finish reason when there is genuinely nothing", async (
   const { runAgent } = await import("../providers/agents.mjs");
   await assert.rejects(() => runAgent("stub", "hi"), /finish_reason: length.*maxTokens/s);
 });
+
+/* ── a gateway that is up but serves nothing ────────────────────────────────
+ *
+ * 2026-10-07: OmniRoute listed 115 models while every pool member refused —
+ * OpenCode had locked its free tier to its own client, and that keyless
+ * connection was the only one configured. health() said yes to all of it.
+ * These pin the checks that tell "listening" from "answering", using the
+ * error bodies the user actually got.
+ */
+
+import { summarizeGatewayError } from "../providers/gateway.mjs";
+
+const OPENCODE_403 = {
+  error: {
+    message: "[403]: Error from provider (Console): OpenCode's free tier can only be used from within OpenCode [oc/big-pickle (403)]",
+    type: "permission_error",
+    code: "insufficient_quota",
+  },
+  diagnostics: { poolSize: 5, attempted: 1, excluded: [{ provider: "unknown", reason: "exhausted_connection:opencode" }] },
+};
+
+test("summarizeGatewayError keeps the provider's reason and drops the diagnostics", () => {
+  const s = summarizeGatewayError(JSON.stringify(OPENCODE_403));
+  assert.match(s, /^Error from provider \(Console\): OpenCode's free tier/);
+  assert.doesNotMatch(s, /diagnostics|poolSize|^\[403\]/);
+  assert.equal(summarizeGatewayError("<html>bad gateway</html>"), "<html>bad gateway</html>");
+});
+
+test("a failed turn's error is one readable line, not a JSON dump", async (t) => {
+  const gw = await stubGateway(() => ({ status: 403, json: OPENCODE_403 }));
+  t.after(() => gw.close());
+
+  await assert.rejects(
+    () => new GatewayProvider({ baseUrl: gw.url, model: "auto/best-chat" }).chat([]),
+    (e) => e instanceof ProviderError && /^Gateway HTTP 403: Error from provider/.test(e.message) && !e.message.includes("{"),
+  );
+});
+
+test("serves() is false for a gateway whose catalog is full but whose pools are dead", async (t) => {
+  const gw = await stubGateway((req) =>
+    req.url.endsWith("/models")
+      ? { json: { data: [{ id: "auto/best-chat" }, { id: "auto/smart" }] } }
+      : { status: 403, json: OPENCODE_403 });
+  t.after(() => gw.close());
+
+  const p = new GatewayProvider({ baseUrl: gw.url, model: "auto/best-chat" });
+  assert.equal((await p.health()).ok, true, "listening");
+  const probe = await p.serves();
+  assert.equal(probe.ok, false, "but not answering");
+  assert.match(probe.error, /HTTP 403: .*OpenCode's free tier/);
+});
+
+test("serves() makes exactly one attempt — a startup probe must not sit through retries", async (t) => {
+  const gw = await stubGateway(() => ({ status: 401, json: { error: { message: "x" }, recovery: { action: "retry" } } }));
+  t.after(() => gw.close());
+
+  await new GatewayProvider({ baseUrl: gw.url, model: "m" }).serves();
+  assert.equal(gw.seen.length, 1);
+});
+
+test("serves() is true on any 200, even a reasoning model's null content", async (t) => {
+  const gw = await stubGateway(() => ({
+    json: { choices: [{ message: { content: null, reasoning_content: "hm" }, finish_reason: "length" }] },
+  }));
+  t.after(() => gw.close());
+
+  const probe = await new GatewayProvider({ baseUrl: gw.url, model: "m" }).serves();
+  assert.equal(probe.ok, true);
+  assert.equal(gw.seen[0].body.stream, false);
+});
+
+test("serves() never throws on a dead gateway", async () => {
+  const probe = await new GatewayProvider({ baseUrl: "http://127.0.0.1:1/v1", model: "m" }).serves();
+  assert.equal(probe.ok, false);
+  assert.ok(probe.error);
+});
+
+/* ── roster fallback ─────────────────────────────────────────────────────── */
+
+/** A registry of several agents, installed via the env override. */
+function stubRoster(t, list) {
+  const dir = mkdtempSync(path.join(tmpdir(), "claudbot-agents-"));
+  const file = path.join(dir, "agents.yaml");
+  writeFileSync(file, JSON.stringify({
+    agents: list.map((a) => ({ model: "m", apiKeyEnv: null, jobDescription: a.name, ...a })),
+  }));
+  const prev = process.env.CLAUDBOT_AGENTS_FILE;
+  process.env.CLAUDBOT_AGENTS_FILE = file;
+  t.after(() => {
+    if (prev === undefined) delete process.env.CLAUDBOT_AGENTS_FILE;
+    else process.env.CLAUDBOT_AGENTS_FILE = prev;
+  });
+}
+
+test("a dead gateway agent falls back to its paid twin, and says so", async (t) => {
+  const dead = await stubGateway(() => ({ status: 403, json: OPENCODE_403 }));
+  const live = await stubGateway(() => ({ json: message({ content: "from nim" }) }));
+  t.after(() => Promise.all([dead.close(), live.close()]));
+  stubRoster(t, [
+    { name: "gateway", endpoint: dead.url, fallback: "fast" },
+    { name: "fast", endpoint: live.url },
+  ]);
+
+  const { runAgent } = await import("../providers/agents.mjs");
+  const out = await runAgent("gateway", "summarise this");
+  assert.match(out, /^\[gateway unavailable \(.*HTTP 403.*\) — answered by fast\]/);
+  assert.match(out, /from nim$/);
+  assert.equal(live.seen[0].body.messages.at(-1).content, "summarise this");
+});
+
+test("without a fallback, the original error surfaces unchanged", async (t) => {
+  const dead = await stubGateway(() => ({ status: 403, json: OPENCODE_403 }));
+  t.after(() => dead.close());
+  stubRoster(t, [{ name: "gateway", endpoint: dead.url }]);
+
+  const { runAgent } = await import("../providers/agents.mjs");
+  await assert.rejects(() => runAgent("gateway", "hi"), /Agent "gateway" HTTP 403/);
+});
+
+test("fallback is one hop — a fallback that also fails is an error, not a chain", async (t) => {
+  const dead = await stubGateway(() => ({ status: 403, json: OPENCODE_403 }));
+  t.after(() => dead.close());
+  stubRoster(t, [
+    { name: "a", endpoint: dead.url, fallback: "b" },
+    { name: "b", endpoint: dead.url, fallback: "a" },
+  ]);
+
+  const { runAgent } = await import("../providers/agents.mjs");
+  await assert.rejects(() => runAgent("a", "hi"), /Agent "b" HTTP 403/);
+  assert.equal(dead.seen.length, 2);
+});
+
+test("an unknown agent name reports itself, not a fallback lookup", async (t) => {
+  stubRoster(t, [{ name: "fast", endpoint: "http://127.0.0.1:1/v1" }]);
+  const { runAgent } = await import("../providers/agents.mjs");
+  await assert.rejects(() => runAgent("nope", "hi"), /Agent "nope" not found/);
+});

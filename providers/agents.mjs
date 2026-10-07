@@ -166,7 +166,35 @@ const RETRYABLE = (status, bodyText = "") =>
 const RETRIES = 3;
 const backoffMs = (attempt) => 1000 * 2 ** (attempt - 1);
 
+/**
+ * Run a registered agent, falling back once to its `fallback:` agent on failure.
+ *
+ * The free gateway agents exist to save NIM credit, not to be a single point of
+ * failure: on 2026-10-07 every OmniRoute pool stopped answering at once (the
+ * one keyless provider behind them locked itself to its own client), and every
+ * `gateway` delegation became an error the orchestrator had to route around by
+ * hand. A `fallback:` names the paid agent that does the same job. One hop only
+ * — a chain of fallbacks would hide a broken registry behind a slow success.
+ *
+ * The note on the front is deliberate: the caller should know the free path
+ * failed, or it will keep choosing it.
+ */
 export async function runAgent(name, prompt, systemPrompt) {
+  try {
+    return await runAgentOnce(name, prompt, systemPrompt);
+  } catch (err) {
+    // Non-throwing lookups: an unknown name must surface its own error, not
+    // a second "not found" raised from inside the fallback check.
+    const registry = loadAgents();
+    const fb = registry.find((a) => a.name === name)?.fallback;
+    if (!fb || fb === name || !registry.some((a) => a.name === fb)) throw err;
+    const out = await runAgentOnce(fb, prompt, systemPrompt);
+    const why = String(err.message).replace(/\s+/g, " ").slice(0, 160);
+    return `[${name} unavailable (${why}) — answered by ${fb}]\n\n${out}`;
+  }
+}
+
+async function runAgentOnce(name, prompt, systemPrompt) {
   const agent = findAgent(name);
 
   const usesKey = agent.apiKeyEnv && agent.apiKeyEnv !== "null" && agent.apiKeyEnv !== null;
