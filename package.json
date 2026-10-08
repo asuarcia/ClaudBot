@@ -18,6 +18,7 @@
     "test":     "node --test test/*.test.mjs forge/test/*.test.mjs",
     "check":    "node scripts/check-cost-routing.mjs && node scripts/check-portable.mjs",
     "check:portable": "node scripts/check-portable.mjs",
+    "gateway:sync":   "node scripts/gateway-sync.mjs",
     "make-portable":  "node scripts/make-portable.mjs"
   },
   "engines": {

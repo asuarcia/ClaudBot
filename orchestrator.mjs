@@ -50,16 +50,15 @@ const C = {
 // ─── model selection ─────────────────────────────────────────────────────────
 
 /**
- * Default orchestrator model. OmniRoute's `auto/*` ids are virtual pools rather
- * than single models: it picks a live backend behind them and fails over when
- * one is rate-limited, which is the entire reason to put a gateway in front.
+ * Default orchestrator model: `claudbot`, a combo of models that were CALLED,
+ * built by `scripts/gateway-sync.mjs` from the provider keys in `.env`.
  *
- * `auto/best-chat`, not `auto/smart`, on measurement rather than on the name.
- * Probed 2026-08-27, six tool-calling turns each: best-chat answered 6/6 and
- * routed 6/6 correctly at a 2.4s median, while smart returned a 429 on a plain
- * "what is the capital of France" in the same round. Both resolve to the same
- * backend when they succeed; the chat pool just fails less, and a conversation
- * is what the orchestrator is for.
+ * It used to be `auto/best-chat`, one of OmniRoute's own pools. Those pools
+ * are assembled from a built-in catalog that goes stale: on 2026-10-07 every
+ * member was dead, and one stale id (`llm7/gpt-4.1-nano`) returned a 401 that
+ * made OmniRoute deactivate the whole llm7 connection, taking its working
+ * models down with it. A combo whose members were each verified — answer and
+ * tool call — cannot route somewhere nobody checked.
  */
 const DEFAULT_MODEL = DEFAULT_ORCHESTRATOR_MODEL;
 

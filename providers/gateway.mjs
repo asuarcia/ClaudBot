@@ -38,10 +38,11 @@ export const DEFAULT_GATEWAY_URL = "http://localhost:20128/v1";
  * orchestrator.mjs because `doctor` checks the same value, and a default that
  * is written down twice is a default that will disagree with itself.
  *
- * `auto/best-chat`, not `auto/smart`, on measurement rather than on the name —
- * see the note at DEFAULT_MODEL in orchestrator.mjs for the numbers.
+ * `claudbot` is a combo that scripts/gateway-sync.mjs builds from models it
+ * has called, rather than one of OmniRoute's own `auto/*` pools — see the note
+ * at DEFAULT_MODEL in orchestrator.mjs for why the pools were abandoned.
  */
-export const DEFAULT_ORCHESTRATOR_MODEL = "auto/best-chat";
+export const DEFAULT_ORCHESTRATOR_MODEL = "claudbot";
 
 /**
  * How long to wait for a cold gateway to answer.

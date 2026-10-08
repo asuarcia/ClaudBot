@@ -233,7 +233,7 @@ function cmdHelp() {
       --mode <mode>    Permission mode: full | auto | safe | readonly
       --claude         Skip the orchestrator, go straight to the Claude Code TUI
     brain              The orchestrator chat, explicitly (same as a bare start)
-      --model <id>     Which gateway model runs it (default: auto/best-chat)
+      --model <id>     Which gateway model runs it (default: claudbot)
     restart            Restart the running agent without closing the terminal
     recall             List past sessions (where you left off)
     recall last        Summarize the previous session

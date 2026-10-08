@@ -144,18 +144,48 @@ from the docs:
 - `provider-credentials.json` only overrides OAuth client ids.
 - `/api/providers` requires the dashboard login; the CLI has no `add`.
 
-So: open `http://localhost:20128` → Providers → Add API Key. In priority order:
+The management API behind the dashboard, though, is scriptable — and
+`scripts/gateway-sync.mjs` uses it, so `.env` is the one place keys live:
 
-| Provider | Key | Why |
-|---|---|---|
-| `nvidia` | the existing `NIM_API_KEY` | already paid for; ~40 RPM, 70+ models |
-| `groq` | free at console.groq.com | fast; per-model 200K tokens/day |
-| `gemini` | free at aistudio.google.com | Flash family, no published cap |
-| `openrouter` | free | `:free` models, 50 req/day (1000 after a one-time $10) |
+```bash
+# put any of these in .env, then:
+#   GEMINI_API_KEY  GROQ_API_KEY  MISTRAL_API_KEY  OPENROUTER_API_KEY
+#   COHERE_API_KEY  SAMBANOVA_API_KEY  LLM7_API_KEY  (+ OMNIROUTE_PASSWORD)
+npm run gateway:sync          # add providers, re-verify, rebuild the combo
+npm run gateway:sync -- --dry # report only; makes no model calls
+```
 
-With only `nvidia` connected the gateway is the NIM roster plus a hop and a
-one-minute boot — it pays off from the second provider on. Verify with
-`claudbot doctor`, which now makes a real call rather than reading the catalog.
+For each provider with a key it creates the connection (once), re-tests it —
+which also re-activates one OmniRoute switched off — then calls up to eight of
+its chat models and keeps the first two that **answer and make a tool call**.
+Those become the `claudbot` combo (priority order: gemini, groq, mistral,
+openrouter, cohere, sambanova, llm7), which is the orchestrator's default model
+and what the `gateway` agents use. A 429 stops probing that provider: free-tier
+limits are per account, so the other models are throttled too. NVIDIA is left
+out on purpose; it is managed by hand.
+
+### Why a combo and not the `auto/*` pools
+
+The pools are assembled from OmniRoute's built-in catalog, which goes stale.
+When llm7 was first connected, the pools routed to `llm7/gpt-4.1-nano` — no
+longer served anonymously — and the 401 made OmniRoute **deactivate the whole
+llm7 connection**, killing its working models too. The stale ids are now hidden
+(`PATCH /api/provider-models`), and Claudbot routes only through the combo,
+whose members were each called before they were added.
+
+### What a key-less setup gets you: almost nothing
+
+Probed 2026-10-07, every provider OmniRoute can use without an account:
+
+| Provider | Result |
+|---|---|
+| `llm7` (any key) | 11 "turbo" models serve anonymously, ~4 requests a **minute** shared, plus a daily token cap. 3 verified with tools. |
+| `pollinations` | the new API is paid; only `openai-fast` (GPT-OSS 20B) is anonymous, and it 401'd through OmniRoute |
+| `uncloseai` | OmniRoute's built-in alias rewrites the one live model to a retired one → 404 |
+
+So the `claudbot` combo currently holds three llm7 models, and on a throttled
+minute the orchestrator fails over to NIM — which is correct, but means the
+gateway only becomes a real brain once a keyed provider is synced in.
 
 ### How Claudbot copes when it does not answer
 
@@ -183,8 +213,8 @@ The gateway is not only the brain's connection — it is also two entries in
 
 | Agent | Model | Replaces (and falls back to) |
 |---|---|---|
-| `gateway` | `auto/best-chat` | `fast` — summaries, drafting, classification, extraction |
-| `gateway-ultra` | `auto/smart` | `researcher` — reasoning, planning, trade-offs |
+| `gateway` | `claudbot` | `fast` — summaries, drafting, classification, extraction |
+| `gateway-ultra` | `claudbot` | `researcher` — reasoning, planning, trade-offs |
 
 They carry `apiKeyEnv: null` because loopback needs no key, and that is what
 made them impossible before: `runAgent` was written against NIM and inherited
@@ -309,7 +339,7 @@ tool-call — and small free models sometimes do — delegation still works by h
 | Variable | Default | Meaning |
 |---|---|---|
 | `OMNIROUTE_URL` | `http://localhost:20128/v1` | Gateway base URL |
-| `OMNIROUTE_MODEL` | `auto/best-chat` | Which model or pool runs the orchestrator |
+| `OMNIROUTE_MODEL` | `claudbot` | Which model or pool runs the orchestrator |
 | `OMNIROUTE_API_KEY` | *(unset)* | Only needed for a non-loopback gateway |
 | `CLAUDBOT_ORCHESTRATOR` | `1` | `0` makes a bare `claudbot` open Claude Code |
 | `CLAUDBOT_ORCHESTRATOR_AGENT` | `agent` | NIM agent used when no gateway answers |

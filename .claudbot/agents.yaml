@@ -162,12 +162,10 @@ agents:
   # and a retry before anything else can be tried.
 
   - name: gateway
-    # The pool, not the backend, deliberately. It resolves to hy3-free today,
-    # but a pool id keeps working when that changes and a pinned id does not.
-    # auto/best-chat over auto/smart on measurement: 6/6 successful turns and
-    # 6/6 correctly routed, while auto/smart 429'd on a plain chat turn in the
-    # first round ("Felo thread creation failed"). Median 2.4s.
-    model: auto/best-chat
+    # The `claudbot` combo, not an OmniRoute auto/* pool: its members are only
+    # models scripts/gateway-sync.mjs called and saw answer with a tool call.
+    # Was auto/best-chat until every pool member died on 2026-10-07.
+    model: claudbot
     endpoint: http://localhost:20128/v1
     apiKeyEnv: null
     fallback: fast
@@ -179,11 +177,10 @@ agents:
       filesystem, no web and no memory between calls, so pass full context.
 
   - name: gateway-ultra
-    # Was oc/nemotron-3-ultra-free, pinned, until OpenCode closed its free tier
-    # to third-party clients (2026-10-07). A pool now, for the same reason
-    # `gateway` uses one: auto/smart is OmniRoute's quality-first pool and keeps
-    # working as connected providers change, where a pinned id just dies.
-    model: auto/smart
+    # Same combo as `gateway` for now — no free reasoning-grade model is
+    # verified yet. Its value today is the fallback to `researcher`; point it
+    # at a dedicated combo once a keyed provider gives a strong reasoner.
+    model: claudbot
     endpoint: http://localhost:20128/v1
     apiKeyEnv: null
     fallback: researcher
