@@ -8,6 +8,7 @@
   },
   "scripts": {
     "setup":    "npm install && cd mcp-servers/claudbot-exec && npm install && cd ../device-control && npm install",
+    "bootstrap": "node scripts/bootstrap.mjs",
     "onboard":  "node scripts/onboard.mjs",
     "start":    "node claudbot.mjs",
     "channels": "node channel-server.mjs",
