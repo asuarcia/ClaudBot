@@ -251,6 +251,9 @@ function cmdHelp() {
     widgets autostart  Bring the widgets back automatically at every logon
       status           Show what's registered and what's running
       uninstall        Stop starting them at logon
+    tunnel             VS Code tunnel: state + heartbeat log
+    tunnel watchdog    Heartbeat every 30 min that restarts a dropped tunnel
+      uninstall        Stop the heartbeat (the tunnel stays on)
     forge doctor       CAD: what's installed and what each backend can do
     forge make "..."   Model a part from a description, then gate and render it
     forge check <stl>  Run the printability gates on a mesh
@@ -1258,6 +1261,11 @@ async function main() {
         return runScript("widgets/install.mjs", rest[0] === "uninstall" ? ["--uninstall"] : []);
       }
       return runScript("widgets/bridge.mjs", rest.length ? rest : ["--watch"]);
+    // VS Code Remote Tunnel heartbeat. Armed by the tunnel service's Run key,
+    // so it guards whatever tunnel is installed and idles when none is.
+    case "tunnel":
+      if (rest[0] === "watchdog") return runScript("tunnel/watchdog.mjs", rest[1] ? rest.slice(1) : ["install"]);
+      return runScript("tunnel/watchdog.mjs", rest.length ? rest : ["status"]);
     case "sync":     return cmdSync(rest);
     // CAD for the printer. `forge doctor` reports what is installed; the rest
     // model, gate, preview and slice. Deliberately no print verb.
